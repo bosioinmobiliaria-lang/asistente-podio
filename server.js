@@ -132,6 +132,34 @@ async function getLeadsFieldsMeta() {
   return raw.fields || [];
 }
 
+// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (CORREGIDA) ---
+async function searchLeadByPhone(phoneNumber) {
+  const appId = process.env.PODIO_LEADS_APP_ID;
+  const token = await getAppAccessTokenFor("leads");
+  
+  try {
+    // NOTA: Asumimos que el external_id del teléfono en tu App de Leads es "telefono-2".
+    // Si es diferente, tendrás que cambiarlo en la línea de abajo.
+    const response = await axios.post(
+      `https://api.podio.com/item/app/${appId}/filter/`,
+      {
+        filters: {
+          "telefono-2": [phoneNumber] 
+        }
+      },
+      { 
+        headers: { Authorization: `OAuth2 ${token}` },
+        timeout: 15000 
+      }
+    );
+    // Devuelve un array con los leads encontrados
+    return response.data.items;
+  } catch (err) { // <-- La llave que faltaba ya está aquí
+    console.error("Error al buscar lead en Podio:", err.response ? err.response.data : err.message);
+    return []; // Si hay un error, devuelve un array vacío.
+  }
+}
+
 // ----------------------------------------
 // Contactos - meta & creación
 // ----------------------------------------
@@ -315,14 +343,12 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (NUEVA LÓGICA CONVERSACIONAL)
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v3.0)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
-// --- "Memoria" del Bot ---
-// Guardará el estado de la conversación para cada usuario.
-const userStates = {};
+const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio ---
 const VENDEDORES_MAP = {
@@ -336,23 +362,9 @@ const VENDEDORES_MAP = {
 };
 const VENDEDOR_POR_DEFECTO_ID = 10;
 
-const TIPO_CONTACTO_MAP = {
-  '1': 1, // Comprador
-  '2': 2  // Propietario
-};
-
+const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 };
 const ORIGEN_CONTACTO_MAP = {
-  '1': 6,  // Inmobiliaria
-  '2': 1,  // Facebook
-  '3': 2,  // Cartelería
-  '4': 8,  // Pagina Web
-  '5': 7,  // Showroom (Punta Peñon)
-  '6': 3,  // 0810 - 220 PINO (7466)
-  '7': 5,  // Referido
-  '8': 9,  // Instagram (PERSONAL)
-  '9': 11, // Instagram (INMOBILIARIA)
-  '10': 10, // Publicador externo
-  '11': 12  // Cliente antiguo
+  '1': 6, '2': 1, '3': 2, '4': 8, '5': 7, '6': 3, '7': 5, '8': 9, '9': 11, '10': 10, '11': 12
 };
 // --- Fin de los Mapas ---
 
@@ -365,29 +377,48 @@ app.post("/whatsapp", async (req, res) => {
     const numeroRemitente = req.body.From || "";
     let currentState = userStates[numeroRemitente];
 
-    // Comando universal para cancelar y volver al menú principal
     if (mensajeRecibido.toLowerCase() === 'cancelar') {
       delete userStates[numeroRemitente];
       respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
-      twiml.message(respuesta);
-      res.writeHead(200, { "Content-Type": "text/xml" });
-      return res.end(twiml.toString());
-    }
-
-    // Si el usuario ya está en medio de una conversación...
-    if (currentState) {
-      if (currentState.action === 'crear_contacto') {
+    } else if (currentState) {
+      // --- FLUJO DE VERIFICACIÓN EN LEADS Y CREACIÓN DE CONTACTO ---
+      if (currentState.action === 'verificar_crear_contacto') {
         switch (currentState.step) {
-          case 'awaiting_name':
-            currentState.data = { title: mensajeRecibido };
-            currentState.step = 'awaiting_phone';
-            respuesta = "Perfecto. Ahora, por favor, envíame solo el número de celular del contacto.";
+          case 'awaiting_phone_to_check':
+            const phoneToCheck = mensajeRecibido.replace(/\s/g, '');
+            const existingLeads = await searchLeadByPhone(phoneToCheck);
+
+            if (existingLeads.length > 0) {
+              const lead = existingLeads[0];
+              // Busca el campo de contacto relacionado para obtener el nombre
+              const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
+              const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+              
+              const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
+              const assignedTo = assignedField ? assignedField.values[0].value.title : 'N/A';
+              respuesta = `✅ Este número ya existe en un Lead.\n\n*Lead:* ${leadTitle}\n*Asignado a:* ${assignedTo}`;
+              delete userStates[numeroRemitente];
+            } else {
+              currentState.step = 'awaiting_creation_confirmation';
+              currentState.data = { phone: [{ type: "mobile", value: phoneToCheck }] };
+              respuesta = `El número *${phoneToCheck}* no existe en Leads. ¿Quieres crear un nuevo *Contacto*?\n\n*1.* Sí, crear contacto\n*2.* No, cancelar`;
+            }
             break;
-          
-          case 'awaiting_phone':
-            currentState.data.phone = [{ type: "mobile", value: mensajeRecibido }];
+
+          case 'awaiting_creation_confirmation':
+            if (mensajeRecibido === '1') {
+              currentState.step = 'awaiting_name';
+              respuesta = "Entendido. Por favor, envíame el *Nombre y Apellido* completos del nuevo contacto.";
+            } else {
+              delete userStates[numeroRemitente];
+              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
+            }
+            break;
+            
+          case 'awaiting_name':
+            currentState.data.title = mensajeRecibido;
             currentState.step = 'awaiting_type';
-            respuesta = "Celular guardado. ¿Qué tipo de contacto es?\n*1.* Comprador\n*2.* Propietario\n\n_(Responde solo con el número)_";
+            respuesta = "Perfecto. ¿Qué tipo de contacto es?\n*1.* Comprador\n*2.* Propietario\n\n_(Responde solo con el número)_";
             break;
 
           case 'awaiting_type':
@@ -409,10 +440,9 @@ app.post("/whatsapp", async (req, res) => {
               respuesta = "Opción no válida. Por favor, responde con uno de los números de la lista.";
             } else {
               currentState.data['contact-type'] = [origenId];
-              
               const vendedorId = VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
               currentState.data['vendedor-asignado-2'] = [vendedorId];
-              currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date().toISOString());
+              currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
 
               await createItemIn("contactos", currentState.data);
               respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
@@ -422,16 +452,15 @@ app.post("/whatsapp", async (req, res) => {
         }
       }
     } else {
-      // Si es una nueva conversación, mostramos el menú principal.
+      // --- MENÚ PRINCIPAL ---
       const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n" +
-                   "*1.* Crear un Contacto Nuevo\n" +
-                   "*2.* Crear un Lead _(próximamente)_\n" +
-                   "*3.* Crear una Visita _(próximamente)_\n\n" +
-                   "Por favor, responde solo con el número de la opción que elijas. Escribe *cancelar* en cualquier momento para volver aquí.";
+                   "*1.* Verificar Teléfono en Leads\n" +
+                   "*2.* Crear un Lead _(próximamente)_\n\n" +
+                   "Por favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
 
       if (mensajeRecibido === '1') {
-        userStates[numeroRemitente] = { action: 'crear_contacto', step: 'awaiting_name' };
-        respuesta = "Entendido, vamos a crear un nuevo contacto. Primero, envíame el *Nombre y Apellido* completos.";
+        userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
+        respuesta = "Entendido. Por favor, envíame el *número de celular* que quieres verificar (sin el 0 y sin el 15, ej: 351... ó 3546...).";
       } else {
         respuesta = menu;
       }
@@ -445,6 +474,7 @@ app.post("/whatsapp", async (req, res) => {
   res.writeHead(200, { "Content-Type": "text/xml" });
   res.end(twiml.toString());
 });
+
 
 // ----------------------------------------
 // RED DE SEGURIDAD: Atrapa errores fatales
