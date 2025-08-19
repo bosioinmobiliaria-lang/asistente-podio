@@ -447,6 +447,17 @@ app.post("/whatsapp", async (req, res) => {
 });
 
 // ----------------------------------------
+// RED DE SEGURIDAD: Atrapa errores fatales
+// ----------------------------------------
+process.on('uncaughtException', (err, origin) => {
+  console.error('!!!!!!!!!! ERROR FATAL DETECTADO !!!!!!!!!!!');
+  console.error('Fecha:', new Date().toISOString());
+  console.error('Error:', err.stack || err);
+  console.error('Origen:', origin);
+  process.exit(1); // Cierra el proceso después de registrar el error
+});
+
+// ----------------------------------------
 // Iniciar el Servidor
 // ----------------------------------------
 app.listen(process.env.PORT, () => {
