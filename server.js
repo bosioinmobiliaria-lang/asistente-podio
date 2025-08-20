@@ -177,15 +177,14 @@ async function searchLeadByPhone(phoneNumber) {
   const token = await getAppAccessTokenFor("leads");
   
   try {
-    // Usamos el external_id de tu nuevo campo de Texto: "telefono-busqueda"
     const searchFieldExternalId = "telefono-busqueda"; 
 
     const response = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
       {
-        // Los campos de texto se buscan con un rango "desde" y "hasta"
         filters: {
-          [searchFieldExternalId]: { "from": phoneNumber, "to": phoneNumber }
+          // ✅ SOLUCIÓN: Enviamos el número como texto simple, no como un objeto.
+          [searchFieldExternalId]: phoneNumber
         }
       },
       { 
@@ -199,7 +198,6 @@ async function searchLeadByPhone(phoneNumber) {
     return [];
   }
 }
-
 
 // ----------------------------------------
 // Contactos - meta & creación
@@ -498,7 +496,7 @@ app.post("/whatsapp", async (req, res) => {
       const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n*2.* Crear un Lead _(próximamente)_\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
       if (mensajeRecibido === '1') {
         userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
-        respuesta = "Entendido. Por favor, enviame el *número de celular* que quieres verificar.";
+        respuesta = "Entendido. Por favor, enviame el *número de celular* que quieres verificar (sin el 0, sin el +54, sin el 15.";
       } else {
         respuesta = menu;
       }
