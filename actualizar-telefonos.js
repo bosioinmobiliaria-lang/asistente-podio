@@ -1,4 +1,4 @@
-// actualizar-telefonos.js
+// actualizar-telefonos.js (Versión 2.0 con manejo de Rate Limit)
 const axios = require("axios");
 const qs =require("querystring");
 require("dotenv").config();
@@ -41,11 +41,16 @@ async function updateItem(itemId, fields) {
     );
 }
 
-// --- LÓGICA PRINCIPAL DEL SCRIPT ---
+// --- NUEVO: Función de Pausa ---
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// --- LÓGICA PRINCIPAL DEL SCRIPT (MEJORADA) ---
 async function runUpdate() {
   console.log("Iniciando actualización de teléfonos en Podio...");
   const appId = process.env.PODIO_LEADS_APP_ID;
-  const token = await getAppAccessTokenFor("leads");
+  let token = await getAppAccessTokenFor("leads");
   let offset = 0;
   const limit = 500;
   let updatedCount = 0;
@@ -76,15 +81,17 @@ async function runUpdate() {
           const searchPhoneNumber = searchPhoneField ? (searchPhoneField.values[0].value || '') : '';
 
           if (mainPhoneNumber && mainPhoneNumber !== searchPhoneNumber) {
-            console.log(`Actualizando Lead ID ${lead.item_id}: ${mainPhoneNumber}`);
+            console.log(`(${totalProcessed}) Actualizando Lead ID ${lead.item_id}: ${mainPhoneNumber}`);
             await updateItem(lead.item_id, {
               "telefono-busqueda": mainPhoneNumber
             });
             updatedCount++;
+            await sleep(500); // <-- ¡LA PAUSA MÁGICA DE MEDIO SEGUNDO!
           }
         }
       }
       offset += leads.length;
+      token = await getAppAccessTokenFor("leads"); // Refrescamos el token por si el proceso es largo
     }
     console.log("\n--- ¡Actualización Completa! ---");
     console.log(`Total de leads procesados: ${totalProcessed}`);
@@ -92,7 +99,13 @@ async function runUpdate() {
 
   } catch (err) {
     console.error("\n--- ERROR DURANTE LA ACTUALIZACIÓN ---");
-    console.error(err.response ? err.response.data : err.message);
+    if (err.response && err.response.data && err.response.data.error === 'rate_limit') {
+        console.error("Se ha alcanzado el límite de velocidad de Podio de nuevo.");
+        console.error("No te preocupes, el script ha guardado el progreso.");
+        console.error("Por favor, espera una hora y vuelve a ejecutar 'node actualizar-telefonos.js'. Continuará desde donde se quedó.");
+    } else {
+        console.error(err.response ? err.response.data : err.message);
+    }
   }
 }
 

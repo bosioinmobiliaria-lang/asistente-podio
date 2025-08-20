@@ -384,15 +384,12 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v7.0 - CORRECCIÓN FINAL)
+// Webhook para WhatsApp (LÓGICA OPTIMIZADA v8.0)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
-const userStates = {}; // "Memoria" del bot
-
-// --- Mapas para las opciones de Podio ---
-// IDs de la App de LEADS
+// --- Mapas (los mismos de antes) ---
 const VENDEDORES_MAP = {
   'whatsapp:+5493571605532': 1,  // Diego Rodriguez
   'whatsapp:+5493546560311': 9,  // Esteban Bosio
@@ -402,7 +399,7 @@ const VENDEDORES_MAP = {
   'whatsapp:+5493546545121': 7,  // Carlos Perez
   'whatsapp:+5493546513759': 8   // Santiago Bosio
 };
-const VENDEDOR_POR_DEFECTO_ID = 1; // Diego Rodriguez por defecto
+const VENDEDOR_POR_DEFECTO_ID = 1;
 
 const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 };
 const ORIGEN_CONTACTO_MAP = {
@@ -413,116 +410,92 @@ const ORIGEN_CONTACTO_MAP = {
 app.post("/whatsapp", async (req, res) => {
   const twiml = new MessagingResponse();
   let respuesta = "";
+  const mensajeRecibido = (req.body.Body || "").trim();
+  const numeroRemitente = req.body.From || "";
 
   try {
-    const mensajeRecibido = (req.body.Body || "").trim();
-    const numeroRemitente = req.body.From || "";
-    let currentState = userStates[numeroRemitente];
+    const comando = mensajeRecibido.toLowerCase();
 
-    if (mensajeRecibido.toLowerCase() === 'cancelar') {
-      delete userStates[numeroRemitente];
-      respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
-    } else if (currentState) {
-      if (currentState.action === 'verificar_crear_contacto') {
-        switch (currentState.step) {
-          case 'awaiting_phone_to_check':
-            const phoneToCheck = mensajeRecibido.replace(/\s/g, '');
-            const existingLeads = await searchLeadByPhone(phoneToCheck);
+    // --- FLUJO 1: VERIFICAR TELÉFONO ---
+    if (comando.startsWith("verificar ")) {
+      const phoneToCheck = comando.replace("verificar ", "").trim().replace(/\s/g, '');
+      
+      // Enviamos respuesta inmediata para que el usuario no espere
+      twiml.message(`Buscando el teléfono *${phoneToCheck}* en Leads...`);
+      res.writeHead(200, { "Content-Type": "text/xml" });
+      res.end(twiml.toString()); 
 
-            if (existingLeads.length > 0) {
-              const lead = existingLeads[0];
-              
-              const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
-              const leadTitle = leadTitleField && leadTitleField.values.length > 0 ? leadTitleField.values[0].value.title : 'Sin nombre';
-              
-              const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-              // --- ¡AQUÍ ESTÁ LA CORRECCIÓN FINAL! ---
-              // Cambiamos .name por .text para obtener el nombre del asesor desde un campo de categoría.
-              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.text : 'No asignado';
-              
-              const creationDate = formatPodioDate(lead.created_on);
-              const lastActivityDays = calculateDaysSince(lead.last_event_on);
-              
-              respuesta = `✅ Este número ya existe en un Lead.\n\n*Contacto:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
-              delete userStates[numeroRemitente];
-
-            } else {
-              currentState.step = 'awaiting_creation_confirmation';
-              currentState.data = { phone: [{ type: "mobile", value: phoneToCheck }] };
-              respuesta = `El número *${phoneToCheck}* no existe en Leads. ¿Quieres crear un nuevo *Contacto*?\n\n*1.* Sí, crear contacto\n*2.* No, cancelar`;
-            }
-            break;
-
-          // ... (el resto de los 'case' se mantienen igual) ...
-          case 'awaiting_creation_confirmation':
-            if (mensajeRecibido === '1') {
-              currentState.step = 'awaiting_name';
-              respuesta = "Entendido. Por favor, envíame el *Nombre y Apellido* completos del nuevo contacto.";
-            } else {
-              delete userStates[numeroRemitente];
-              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
-            }
-            break;
-            
-          case 'awaiting_name':
-            currentState.data.title = mensajeRecibido;
-            currentState.step = 'awaiting_type';
-            respuesta = "Perfecto. ¿Qué tipo de contacto es?\n*1.* Comprador\n*2.* Propietario\n\n_(Responde solo con el número)_";
-            break;
-
-          case 'awaiting_type':
-            const tipoId = TIPO_CONTACTO_MAP[mensajeRecibido];
-            if (!tipoId) {
-              respuesta = "Opción no válida. Por favor, responde solo con el número (1 o 2).";
-            } else {
-              currentState.data['tipo-de-contacto'] = [tipoId];
-              currentState.step = 'awaiting_origin';
-              respuesta = "Tipo guardado. ¿Cuál es el origen del contacto?\n" +
-                          "*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo\n\n" +
-                          "_(Responde solo con el número)_";
-            }
-            break;
-
-          case 'awaiting_origin':
-            const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
-            if (!origenId) {
-              respuesta = "Opción no válida. Por favor, responde con uno de los números de la lista.";
-            } else {
-              currentState.data['contact-type'] = [origenId];
-              const vendedorId = VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-              currentState.data['vendedor-asignado-2'] = [vendedorId];
-              currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
-
-              await createItemIn("contactos", currentState.data);
-              respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
-              delete userStates[numeroRemitente];
-            }
-            break;
-        }
-      }
-    } else {
-      const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n" +
-                   "*1.* Verificar Teléfono en Leads\n" +
-                   "*2.* Crear un Lead _(próximamente)_\n\n" +
-                   "Por favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
-
-      if (mensajeRecibido === '1') {
-        userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
-        respuesta = "Entendido. Por favor, envíame el *número de celular* que quieres verificar (sin el 0 y sin el 15, ej: 351... ó 3546...).";
+      // Hacemos la búsqueda en segundo plano
+      const existingLeads = await searchLeadByPhone(phoneToCheck);
+      
+      let finalMessage = "";
+      if (existingLeads.length > 0) {
+        const lead = existingLeads[0];
+        const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
+        const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+        const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
+        const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
+        const creationDate = formatPodioDate(lead.created_on);
+        const lastActivityDays = calculateDaysSince(lead.last_event_on);
+        
+        finalMessage = `✅ Este número ya existe en un Lead.\n\n*Contacto:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
       } else {
-        respuesta = menu;
+        finalMessage = `✅ El número *${phoneToCheck}* no existe en Leads.`;
+      }
+
+      // Enviamos la respuesta final a través de la API de Twilio
+      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      await client.messages.create({
+         body: finalMessage,
+         from: req.body.To, // El número de Twilio
+         to: numeroRemitente // El número del asesor
+      });
+      return; // Terminamos la ejecución aquí
+    }
+
+    // --- FLUJO 2: CREAR CONTACTO EN UN SOLO MENSAJE ---
+    else if (comando.startsWith("crear contacto ")) {
+      // Formato: crear contacto [Nombre] / [Teléfono] / [Tipo ID] / [Origen ID]
+      const parts = mensajeRecibido.substring("crear contacto ".length).split('/').map(p => p.trim());
+      if (parts.length < 4) {
+        respuesta = "Formato incorrecto. Usa:\n`crear contacto [Nombre] / [Teléfono] / [Tipo] / [Origen]`";
+      } else {
+        const [nombre, telefono, tipoId, origenId] = parts;
+        
+        const fields = {
+          title: nombre,
+          phone: [{ type: "mobile", value: telefono }],
+          'tipo-de-contacto': [TIPO_CONTACTO_MAP[tipoId]],
+          'contact-type': [ORIGEN_CONTACTO_MAP[origenId]],
+          'vendedor-asignado-2': [VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID],
+          'fecha-de-creacion': buildPodioDateObject(new Date())
+        };
+
+        await createItemIn("contactos", fields);
+        respuesta = `✅ ¡Contacto *"${nombre}"* creado con éxito!`;
       }
     }
+    
+    // --- MENÚ PRINCIPAL ---
+    else {
+      respuesta = "Hola 👋, soy tu asistente de Podio. Comandos disponibles:\n\n" +
+                  "*1.* `verificar [número de teléfono]`\n" +
+                  "*2.* `crear contacto [Nombre] / [Teléfono] / [Tipo] / [Origen]`\n\n" +
+                  "_(Los números de Tipo y Origen son los mismos de antes)_";
+    }
+
+    twiml.message(respuesta);
+    res.writeHead(200, { "Content-Type": "text/xml" });
+    res.end(twiml.toString());
+
   } catch (err) {
     console.error("ERROR GENERAL EN EL WEBHOOK:", err);
-    respuesta = "❌ Ocurrió un error inesperado. La operación ha sido cancelada. Intenta de nuevo.";
+    const errorResponse = new MessagingResponse();
+    errorResponse.message("❌ Ocurrió un error inesperado. La operación ha sido cancelada.");
+    res.writeHead(200, { "Content-Type": "text/xml" });
+    res.end(errorResponse.toString());
   }
-
-  twiml.message(respuesta);
-  res.writeHead(200, { "Content-Type": "text/xml" });
-  res.end(twiml.toString());
 });
-
 
 // ----------------------------------------
 // RED DE SEGURIDAD: Atrapa errores fatales
