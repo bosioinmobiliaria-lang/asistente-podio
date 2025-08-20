@@ -72,6 +72,27 @@ function buildPodioDateObject(input) {
   };
 }
 
+// --- NUEVO AYUDANTE PARA CALCULAR DÍAS DESDE UNA FECHA ---
+function calculateDaysSince(dateString) {
+  if (!dateString) return 'N/A';
+  try {
+    const activityDate = new Date(dateString.replace(" ", "T") + "Z"); // Aseguramos formato ISO
+    const today = new Date();
+    
+    // Diferencia en milisegundos
+    const diffTime = Math.abs(today - activityDate);
+    // Convertir a días
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) return 'hoy';
+    if (diffDays === 1) return 'hace 1 día';
+    return `hace ${diffDays} días`;
+  } catch (e) {
+    console.error("Error al calcular días:", e);
+    return 'N/A';
+  }
+}
+
 // --- NUEVO AYUDANTE PARA FORMATEAR FECHAS DE PODIO ---
 function formatPodioDate(dateString) {
   if (!dateString) return 'N/A';
@@ -376,7 +397,7 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v4.0)
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v5.0 - FINAL)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -384,16 +405,17 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio ---
+// ¡ACTUALIZADO CON IDs DE LA APP DE LEADS!
 const VENDEDORES_MAP = {
   'whatsapp:+5493571605532': 1,  // Diego Rodriguez
-  'whatsapp:+5493546560311': 8, // Esteban Bosio
-  'whatsapp:+5493546490249': 5, // Esteban Coll
-  'whatsapp:+5493546549847': 2, // Maximiliano Perez
+  'whatsapp:+5493546560311': 9, // Esteban Bosio
+  'whatsapp:+5493546490249': 2, // Esteban Coll
+  'whatsapp:+5493546549847': 3, // Maximiliano Perez
   'whatsapp:+5493546452443': 10, // Gabriel Perez
-  'whatsapp:+5493546545121': 4,  // Carlos Perez
-  'whatsapp:+5493546513759': 9  // Santiago Bosio
+  'whatsapp:+5493546545121': 7,  // Carlos Perez
+  'whatsapp:+5493546513759': 8  // Santiago Bosio
 };
-const VENDEDOR_POR_DEFECTO_ID = 10;
+const VENDEDOR_POR_DEFECTO_ID = 1; // Diego Rodriguez por defecto
 
 const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 };
 const ORIGEN_CONTACTO_MAP = {
@@ -423,18 +445,16 @@ app.post("/whatsapp", async (req, res) => {
             if (existingLeads.length > 0) {
               const lead = existingLeads[0];
               
-              // --- LÓGICA MEJORADA PARA EXTRAER DATOS ---
               const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
               const leadTitle = leadTitleField && leadTitleField.values.length > 0 ? leadTitleField.values[0].value.title : 'Sin nombre';
               
               const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
               const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.title : 'No asignado';
               
-              // Usamos los metadatos del item para las fechas, que es más confiable
               const creationDate = formatPodioDate(lead.created_on);
-              const lastActivityDate = formatPodioDate(lead.last_event_on);
+              const lastActivityDays = calculateDaysSince(lead.last_event_on);
               
-              respuesta = `✅ Este número ya existe en un Lead.\n\n*Contacto:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDate}`;
+              respuesta = `✅ Este número ya existe en un Lead.\n\n*Contacto:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
               delete userStates[numeroRemitente];
 
             } else {
@@ -491,7 +511,6 @@ app.post("/whatsapp", async (req, res) => {
         }
       }
     } else {
-      // --- MENÚ PRINCIPAL ---
       const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n" +
                    "*1.* Verificar Teléfono en Leads\n" +
                    "*2.* Crear un Lead _(próximamente)_\n\n" +
