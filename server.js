@@ -410,7 +410,7 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v5.0 - FINAL)
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v6.0 - CORRECCIÓN FINAL)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -418,15 +418,15 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio ---
-// ¡ACTUALIZADO CON IDs DE LA APP DE LEADS!
+// IDs de la App de LEADS
 const VENDEDORES_MAP = {
   'whatsapp:+5493571605532': 1,  // Diego Rodriguez
-  'whatsapp:+5493546560311': 9, // Esteban Bosio
-  'whatsapp:+5493546490249': 2, // Esteban Coll
-  'whatsapp:+5493546549847': 3, // Maximiliano Perez
+  'whatsapp:+5493546560311': 9,  // Esteban Bosio
+  'whatsapp:+5493546490249': 2,  // Esteban Coll
+  'whatsapp:+5493546549847': 3,  // Maximiliano Perez
   'whatsapp:+5493546452443': 10, // Gabriel Perez
   'whatsapp:+5493546545121': 7,  // Carlos Perez
-  'whatsapp:+5493546513759': 8  // Santiago Bosio
+  'whatsapp:+5493546513759': 8   // Santiago Bosio
 };
 const VENDEDOR_POR_DEFECTO_ID = 1; // Diego Rodriguez por defecto
 
@@ -462,7 +462,9 @@ app.post("/whatsapp", async (req, res) => {
               const leadTitle = leadTitleField && leadTitleField.values.length > 0 ? leadTitleField.values[0].value.title : 'Sin nombre';
               
               const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.title : 'No asignado';
+              // --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
+              // Cambiamos .title por .name para obtener el nombre del asesor
+              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.name : 'No asignado';
               
               const creationDate = formatPodioDate(lead.created_on);
               const lastActivityDays = calculateDaysSince(lead.last_event_on);
@@ -477,6 +479,7 @@ app.post("/whatsapp", async (req, res) => {
             }
             break;
 
+          // ... (el resto de los 'case' se mantienen igual) ...
           case 'awaiting_creation_confirmation':
             if (mensajeRecibido === '1') {
               currentState.step = 'awaiting_name';
