@@ -72,6 +72,21 @@ function buildPodioDateObject(input) {
   };
 }
 
+// --- NUEVO AYUDANTE PARA FORMATEAR FECHAS DE PODIO ---
+function formatPodioDate(dateString) {
+  if (!dateString) return 'N/A';
+  try {
+    // La fecha de Podio viene en formato "AAAA-MM-DD HH:MM:SS" (UTC)
+    const date = new Date(dateString + " UTC");
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0'); // Se suma 1 porque los meses empiezan en 0
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  } catch (e) {
+    return 'N/A';
+  }
+}
+
 // ----------------------------------------
 // Tokens por APP (grant_type=app)
 // ----------------------------------------
@@ -361,7 +376,7 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v3.0)
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v4.0)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -370,13 +385,13 @@ const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio ---
 const VENDEDORES_MAP = {
-  'whatsapp:+5493571605532': 8,  // Diego Rodriguez
-  'whatsapp:+5493546560311': 10, // Esteban Bosio
-  'whatsapp:+5493546490249': 11, // Esteban Coll
-  'whatsapp:+5493546549847': 14, // Maximiliano Perez
-  'whatsapp:+5493546452443': 17, // Gabriel Perez
-  'whatsapp:+5493546545121': 9,  // Carlos Perez
-  'whatsapp:+5493546513759': 16  // Santiago Bosio
+  'whatsapp:+5493571605532': 1,  // Diego Rodriguez
+  'whatsapp:+5493546560311': 8, // Esteban Bosio
+  'whatsapp:+5493546490249': 5, // Esteban Coll
+  'whatsapp:+5493546549847': 2, // Maximiliano Perez
+  'whatsapp:+5493546452443': 10, // Gabriel Perez
+  'whatsapp:+5493546545121': 4,  // Carlos Perez
+  'whatsapp:+5493546513759': 9  // Santiago Bosio
 };
 const VENDEDOR_POR_DEFECTO_ID = 10;
 
@@ -399,7 +414,6 @@ app.post("/whatsapp", async (req, res) => {
       delete userStates[numeroRemitente];
       respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
     } else if (currentState) {
-      // --- FLUJO DE VERIFICACIÓN EN LEADS Y CREACIÓN DE CONTACTO ---
       if (currentState.action === 'verificar_crear_contacto') {
         switch (currentState.step) {
           case 'awaiting_phone_to_check':
@@ -408,18 +422,21 @@ app.post("/whatsapp", async (req, res) => {
 
             if (existingLeads.length > 0) {
               const lead = existingLeads[0];
-              // Busca el campo de contacto relacionado para obtener el nombre
+              
+              // --- LÓGICA MEJORADA PARA EXTRAER DATOS ---
               const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
-              const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+              const leadTitle = leadTitleField && leadTitleField.values.length > 0 ? leadTitleField.values[0].value.title : 'Sin nombre';
               
               const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-              const assignedTo = assignedField ? assignedField.values[0].value.title : 'N/A';
+              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.title : 'No asignado';
               
-              const creationDateField = lead.fields.find(f => f.external_id === 'fecha-de-creacion-2'); // Asumimos este external_id para la fecha de creación del lead
-              const creationDate = creationDateField ? creationDateField.values[0].start_date : 'N/A';
-
-              respuesta = `✅ Este número ya existe en un Lead.\n\n*Lead:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}`;
+              // Usamos los metadatos del item para las fechas, que es más confiable
+              const creationDate = formatPodioDate(lead.created_on);
+              const lastActivityDate = formatPodioDate(lead.last_event_on);
+              
+              respuesta = `✅ Este número ya existe en un Lead.\n\n*Contacto:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDate}`;
               delete userStates[numeroRemitente];
+
             } else {
               currentState.step = 'awaiting_creation_confirmation';
               currentState.data = { phone: [{ type: "mobile", value: phoneToCheck }] };
