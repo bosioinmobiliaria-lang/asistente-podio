@@ -132,28 +132,46 @@ async function getLeadsFieldsMeta() {
   return raw.fields || [];
 }
 
-// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS ---
+// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (MÉTODO MANUAL) ---
 async function searchLeadByPhone(phoneNumber) {
   const appId = process.env.PODIO_LEADS_APP_ID;
   const token = await getAppAccessTokenFor("leads");
   
   try {
-    // NOTA: Asumimos que el external_id del teléfono en tu App de Leads es "telefono-2".
-    // Si es diferente, tendrás que cambiarlo en la línea de abajo.
+    // Paso 1: Pedimos a Podio TODOS los items (leads) de la app.
     const response = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
-      {
-        filters: {
-          "telefono-2": [phoneNumber] 
-        }
-      },
+      {}, // Sin filtro, para traer todo
       { 
         headers: { Authorization: `OAuth2 ${token}` },
-        timeout: 15000 
+        timeout: 20000 // Aumentamos la paciencia por si son muchos leads
       }
     );
-    // Devuelve un array con los leads encontrados
-    return response.data.items;
+
+    const allLeads = response.data.items;
+    
+    // Paso 2: Buscamos manualmente en la lista.
+    for (const lead of allLeads) {
+      // Buscamos el campo de teléfono en el lead actual
+      const phoneField = lead.fields.find(f => f.external_id === 'telefono-2');
+      if (phoneField) {
+        // Revisamos cada número de teléfono en ese campo
+        for (const phoneValue of phoneField.values) {
+          // Limpiamos el número de Podio y el que buscamos para compararlos
+          const podioPhoneNumber = (phoneValue.value || '').replace(/\D/g, '');
+          const searchPhoneNumber = (phoneNumber || '').replace(/\D/g, '');
+          
+          if (podioPhoneNumber === searchPhoneNumber) {
+            // ¡Lo encontramos! Devolvemos este lead dentro de un array.
+            return [lead];
+          }
+        }
+      }
+    }
+
+    // Si terminamos de revisar y no encontramos nada, devolvemos un array vacío.
+    return [];
+
   } catch (err) {
     console.error("Error al buscar lead en Podio:", err.response ? err.response.data : err.message);
     return []; // Si hay un error, devuelve un array vacío.
