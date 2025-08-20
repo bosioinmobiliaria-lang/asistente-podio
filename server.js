@@ -413,7 +413,7 @@ app.get("/", (_req, res) =>
 );
 
 // ----------------------------------------
-// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v6.0 - CORRECCIÓN FINAL)
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL v7.0 - CORRECCIÓN FINAL)
 // ----------------------------------------
 const twilio = require("twilio");
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -465,9 +465,9 @@ app.post("/whatsapp", async (req, res) => {
               const leadTitle = leadTitleField && leadTitleField.values.length > 0 ? leadTitleField.values[0].value.title : 'Sin nombre';
               
               const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-              // --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-              // Cambiamos .title por .name para obtener el nombre del asesor
-              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.name : 'No asignado';
+              // --- ¡AQUÍ ESTÁ LA CORRECCIÓN FINAL! ---
+              // Cambiamos .name por .text para obtener el nombre del asesor desde un campo de categoría.
+              const assignedTo = assignedField && assignedField.values.length > 0 && assignedField.values[0].value ? assignedField.values[0].value.text : 'No asignado';
               
               const creationDate = formatPodioDate(lead.created_on);
               const lastActivityDays = calculateDaysSince(lead.last_event_on);
