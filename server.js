@@ -390,7 +390,7 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio (sin cambios) ---
-const VENDEDORES_MAP = {
+const VENDEDORES_LEADS_MAP = {
   'whatsapp:+5493571605532': 1,  // Diego Rodriguez
   'whatsapp:+5493546560311': 9,  // Esteban Bosio
   'whatsapp:+5493546490249': 2,  // Esteban Coll
@@ -399,8 +399,19 @@ const VENDEDORES_MAP = {
   'whatsapp:+5493546545121': 7,  // Carlos Perez
   'whatsapp:+5493546513759': 8   // Santiago Bosio
 };
-const VENDEDOR_POR_DEFECTO_ID = 1;
-const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 }; // 1: Comprador, 2: Propietario
+
+// ✅ NUEVO: IDs para la App de CONTACTOS (extraídos de tu captura)
+const VENDEDORES_CONTACTOS_MAP = {
+  'whatsapp:+5493571605532': 1,  // Diego Rodriguez
+  'whatsapp:+5493546560311': 8,  // Esteban Bosio
+  'whatsapp:+5493546490249': 5,  // Esteban Coll
+  'whatsapp:+5493546549847': 2,  // Maximiliano Perez
+  'whatsapp:+5493546452443': 10, // Gabriel Perez
+  'whatsapp:+5493546545121': 4,  // Carlos Perez
+  'whatsapp:+5493546513759': 9   // Santiago Bosio
+};
+const VENDEDOR_POR_DEFECTO_ID = 1; // Usamos el ID de Diego como default
+const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 }; 
 const ORIGEN_CONTACTO_MAP = {
   '1': 6, '2': 1, '3': 2, '4': 8, '5': 7, '6': 3, '7': 5, '8': 9, '9': 11, '10': 10, '11': 12
 };
@@ -419,7 +430,6 @@ app.post("/whatsapp", async (req, res) => {
       respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
     
     } else if (currentState) {
-      // --- FLUJO ACTIVO: El usuario ya está en una conversación ---
       switch (currentState.step) {
         
         case 'awaiting_phone_to_check':
@@ -451,7 +461,6 @@ app.post("/whatsapp", async (req, res) => {
 
         case 'awaiting_creation_confirmation':
             if (mensajeRecibido === '1') {
-              // --- CAMBIO 1: Apuntamos al nuevo paso 'awaiting_name_and_type' ---
               currentState.step = 'awaiting_name_and_type';
               respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto (1 para Comprador, 2 para Propietario)";
             } else {
@@ -460,7 +469,6 @@ app.post("/whatsapp", async (req, res) => {
             }
             break;
 
-        // --- CAMBIO 2: Nuevo paso que combina la recepción de Nombre y Tipo ---
         case 'awaiting_name_and_type':
             const info = mensajeRecibido.split('\n').map(line => line.trim());
             if (info.length < 2) {
@@ -478,18 +486,16 @@ app.post("/whatsapp", async (req, res) => {
               break;
             }
             
-            // Guardamos los datos recibidos
             currentState.data.title = nombre;
             currentState.data['tipo-de-contacto'] = [tipoId];
             
-            // Construimos el resumen y la pregunta final
+            // ✅ MEJORA: Agregamos el teléfono al resumen
+            const telefono = currentState.data.phone[0].value;
             const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
-            respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
+            respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
 
             currentState.step = 'awaiting_origin';
             break;
-
-        // --- CAMBIO 3: Los pasos 'awaiting_name' y 'awaiting_type' ya no son necesarios ---
 
         case 'awaiting_origin':
             const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
@@ -497,11 +503,12 @@ app.post("/whatsapp", async (req, res) => {
               respuesta = "Opción no válida. Por favor, respondé con uno de los números de la lista.";
             } else {
               currentState.data['contact-type'] = [origenId];
-              const vendedorId = VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+              
+              // ✅ SOLUCIÓN: Usamos el mapa de IDs de Vendedor para CONTACTOS
+              const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
               currentState.data['vendedor-asignado-2'] = [vendedorId];
               currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
               
-              // El error de carga lo vemos después, pero la llamada a la función se queda aquí
               await createItemIn("contactos", currentState.data); 
 
               respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
@@ -510,7 +517,6 @@ app.post("/whatsapp", async (req, res) => {
             break;
       }
     } else {
-      // --- MENÚ PRINCIPAL (Sin cambios) ---
       const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n*2.* Crear un Lead _(próximamente)_\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
       if (mensajeRecibido === '1') {
         userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
