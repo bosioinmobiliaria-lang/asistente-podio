@@ -456,7 +456,7 @@ app.post("/whatsapp", async (req, res) => {
                 phone: [{ type: "mobile", value: phoneToCheck }],
                 "telefono-busqueda": phoneToCheck // Lo guardamos temporalmente aquí
             };
-            respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo **Contacto**?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
+            respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
           }
           break;
 
@@ -464,7 +464,7 @@ app.post("/whatsapp", async (req, res) => {
             // ... (Sin cambios)
             if (mensajeRecibido === '1') {
               currentState.step = 'awaiting_name_and_type';
-              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(**1.** Comprador, **2.** Propietario)";
+              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, *cada uno en una nueva línea*:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
             } else {
               delete userStates[numeroRemitente];
               respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
@@ -492,7 +492,7 @@ app.post("/whatsapp", async (req, res) => {
             currentState.data['tipo-de-contacto'] = [tipoId];
             const telefono = currentState.data.phone[0].value;
             const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
-            respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
+            respuesta = `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
             currentState.step = 'awaiting_origin';
             break;
 
