@@ -133,7 +133,7 @@ async function getAppAccessTokenFor(appName = "contactos") {
   try {
     const { data } = await axios.post("https://podio.com/oauth/token", body, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      timeout: 10000 // Aumenta el tiempo de espera a 10 segundos
+      timeout: 30000 // Aumenta el tiempo de espera a 30 segundos
     });
     TOKENS[appName].value = data.access_token;
     TOKENS[appName].exp = Date.now() + (data.expires_in || 3600) * 1000;
@@ -150,7 +150,10 @@ async function createItemIn(appName, fields) {
   const { data } = await axios.post(
     `https://api.podio.com/item/app/${appId}/`,
     { fields },
-    { headers: { Authorization: `OAuth2 ${token}` } }
+    { 
+      headers: { Authorization: `OAuth2 ${token}` },
+      timeout: 30000 // Aumenta el tiempo de espera a 30 segundos
+    }
   );
   return data;
 }
