@@ -187,7 +187,7 @@ async function searchLeadByPhone(phoneNumber) {
         },
         { 
           headers: { Authorization: `OAuth2 ${token}` },
-          timeout: 20000 
+          timeout: 40000 
         }
       );
 
