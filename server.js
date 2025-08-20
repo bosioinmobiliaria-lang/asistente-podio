@@ -132,7 +132,7 @@ async function getLeadsFieldsMeta() {
   return raw.fields || [];
 }
 
-// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (CORREGIDA) ---
+// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS ---
 async function searchLeadByPhone(phoneNumber) {
   const appId = process.env.PODIO_LEADS_APP_ID;
   const token = await getAppAccessTokenFor("leads");
@@ -154,7 +154,7 @@ async function searchLeadByPhone(phoneNumber) {
     );
     // Devuelve un array con los leads encontrados
     return response.data.items;
-  } catch (err) { // <-- La llave que faltaba ya está aquí
+  } catch (err) {
     console.error("Error al buscar lead en Podio:", err.response ? err.response.data : err.message);
     return []; // Si hay un error, devuelve un array vacío.
   }
@@ -352,13 +352,13 @@ const userStates = {}; // "Memoria" del bot
 
 // --- Mapas para las opciones de Podio ---
 const VENDEDORES_MAP = {
-  'whatsapp:+5493571605532': 1,  // Diego Rodriguez
-  'whatsapp:+5493546560311': 8, // Esteban Bosio
-  'whatsapp:+5493546490249': 5, // Esteban Coll
-  'whatsapp:+5493546549847': 2, // Maximiliano Perez
-  'whatsapp:+5493546452443': 10, // Gabriel Perez
-  'whatsapp:+5493546545121': 4,  // Carlos Perez
-  'whatsapp:+5493546513759': 9  // Santiago Bosio
+  'whatsapp:+5493571605532': 8,  // Diego Rodriguez
+  'whatsapp:+5493546560311': 10, // Esteban Bosio
+  'whatsapp:+5493546490249': 11, // Esteban Coll
+  'whatsapp:+5493546549847': 14, // Maximiliano Perez
+  'whatsapp:+5493546452443': 17, // Gabriel Perez
+  'whatsapp:+5493546545121': 9,  // Carlos Perez
+  'whatsapp:+5493546513759': 16  // Santiago Bosio
 };
 const VENDEDOR_POR_DEFECTO_ID = 10;
 
@@ -396,7 +396,11 @@ app.post("/whatsapp", async (req, res) => {
               
               const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
               const assignedTo = assignedField ? assignedField.values[0].value.title : 'N/A';
-              respuesta = `✅ Este número ya existe en un Lead.\n\n*Lead:* ${leadTitle}\n*Asignado a:* ${assignedTo}`;
+              
+              const creationDateField = lead.fields.find(f => f.external_id === 'fecha-de-creacion-2'); // Asumimos este external_id para la fecha de creación del lead
+              const creationDate = creationDateField ? creationDateField.values[0].start_date : 'N/A';
+
+              respuesta = `✅ Este número ya existe en un Lead.\n\n*Lead:* ${leadTitle}\n*Asignado a:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}`;
               delete userStates[numeroRemitente];
             } else {
               currentState.step = 'awaiting_creation_confirmation';
