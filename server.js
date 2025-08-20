@@ -440,6 +440,7 @@ app.post("/whatsapp", async (req, res) => {
           }
           const existingLeads = await searchLeadByPhone(phoneToCheck);
           if (existingLeads.length > 0) {
+            // ... (Esta parte funciona bien, sin cambios)
             const lead = existingLeads[0];
             const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
             const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
@@ -453,13 +454,14 @@ app.post("/whatsapp", async (req, res) => {
             currentState.step = 'awaiting_creation_confirmation';
             currentState.data = {
                 phone: [{ type: "mobile", value: phoneToCheck }],
-                "telefono-busqueda": phoneToCheck
+                "telefono-busqueda": phoneToCheck // Lo guardamos temporalmente aquí
             };
             respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo **Contacto**?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
           }
           break;
 
         case 'awaiting_creation_confirmation':
+            // ... (Sin cambios)
             if (mensajeRecibido === '1') {
               currentState.step = 'awaiting_name_and_type';
               respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto (1 para Comprador, 2 para Propietario)";
@@ -470,6 +472,7 @@ app.post("/whatsapp", async (req, res) => {
             break;
 
         case 'awaiting_name_and_type':
+            // ... (Sin cambios)
             const info = mensajeRecibido.split('\n').map(line => line.trim());
             if (info.length < 2) {
               respuesta = "❌ Faltan datos. Recordá enviarme el Nombre en la primera línea y el Tipo (1 o 2) en la segunda.";
@@ -485,15 +488,11 @@ app.post("/whatsapp", async (req, res) => {
               respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
               break;
             }
-            
             currentState.data.title = nombre;
             currentState.data['tipo-de-contacto'] = [tipoId];
-            
-            // ✅ MEJORA: Agregamos el teléfono al resumen
             const telefono = currentState.data.phone[0].value;
             const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
             respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
-
             currentState.step = 'awaiting_origin';
             break;
 
@@ -503,12 +502,14 @@ app.post("/whatsapp", async (req, res) => {
               respuesta = "Opción no válida. Por favor, respondé con uno de los números de la lista.";
             } else {
               currentState.data['contact-type'] = [origenId];
-              
-              // ✅ SOLUCIÓN: Usamos el mapa de IDs de Vendedor para CONTACTOS
               const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
               currentState.data['vendedor-asignado-2'] = [vendedorId];
               currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
               
+              // ✅ SOLUCIÓN: Eliminamos el campo que no existe en la App de Contactos
+              // antes de enviarlo a Podio.
+              delete currentState.data['telefono-busqueda'];
+
               await createItemIn("contactos", currentState.data); 
 
               respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
@@ -526,7 +527,17 @@ app.post("/whatsapp", async (req, res) => {
       }
     }
   } catch (err) {
-    console.error("ERROR GENERAL EN EL WEBHOOK:", err);
+    // ✅ MEJORA: Log de errores mucho más detallado
+    console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
+    if (err.response) {
+        // Esto captura errores específicos de la API de Podio
+        console.error("Status Code:", err.response.status);
+        console.error("Respuesta de Podio:", JSON.stringify(err.response.data, null, 2));
+    } else {
+        // Esto captura otros errores (de red, de código, etc.)
+        console.error("Error no relacionado con la API:", err.message);
+        console.error(err.stack);
+    }
     respuesta = "❌ Ocurrió un error inesperado. La operación ha sido cancelada. Por favor, informa al administrador.";
   }
 
