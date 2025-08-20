@@ -464,7 +464,7 @@ app.post("/whatsapp", async (req, res) => {
             // ... (Sin cambios)
             if (mensajeRecibido === '1') {
               currentState.step = 'awaiting_name_and_type';
-              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto (1 para Comprador, 2 para Propietario)";
+              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(**1.** Comprador, **2.** Propietario)";
             } else {
               delete userStates[numeroRemitente];
               respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
@@ -518,7 +518,7 @@ app.post("/whatsapp", async (req, res) => {
             break;
       }
     } else {
-      const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n*2.* Crear un Lead _(próximamente)_\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
+      const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
       if (mensajeRecibido === '1') {
         userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
         respuesta = "Entendido. Por favor, enviame el *número de celular* que quieres verificar.";
