@@ -168,49 +168,62 @@ async function getLeadsFieldsMeta() {
   return raw.fields || [];
 }
 
-// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (MÉTODO MANUAL) ---
+// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (CON PAGINACIÓN) ---
 async function searchLeadByPhone(phoneNumber) {
   const appId = process.env.PODIO_LEADS_APP_ID;
   const token = await getAppAccessTokenFor("leads");
-  
-  try {
-    // Paso 1: Pedimos a Podio TODOS los items (leads) de la app.
-    const response = await axios.post(
-      `https://api.podio.com/item/app/${appId}/filter/`,
-      {}, // Sin filtro, para traer todo
-      { 
-        headers: { Authorization: `OAuth2 ${token}` },
-        timeout: 20000 // Aumentamos la paciencia por si son muchos leads
-      }
-    );
+  let offset = 0;
+  const limit = 500; // Pedimos los leads en lotes grandes
+  let hasMore = true;
 
-    const allLeads = response.data.items;
-    
-    // Paso 2: Buscamos manualmente en la lista.
-    for (const lead of allLeads) {
-      // Buscamos el campo de teléfono en el lead actual
-      const phoneField = lead.fields.find(f => f.external_id === 'telefono-2');
-      if (phoneField) {
-        // Revisamos cada número de teléfono en ese campo
-        for (const phoneValue of phoneField.values) {
-          // Limpiamos el número de Podio y el que buscamos para compararlos
-          const podioPhoneNumber = (phoneValue.value || '').replace(/\D/g, '');
-          const searchPhoneNumber = (phoneNumber || '').replace(/\D/g, '');
-          
-          if (podioPhoneNumber === searchPhoneNumber) {
-            // ¡Lo encontramos! Devolvemos este lead dentro de un array.
-            return [lead];
+  try {
+    while (hasMore) {
+      // Pedimos un lote de leads a Podio
+      const response = await axios.post(
+        `https://api.podio.com/item/app/${appId}/filter/`,
+        {
+          limit: limit,
+          offset: offset // Le decimos a Podio desde dónde empezar a contar
+        },
+        { 
+          headers: { Authorization: `OAuth2 ${token}` },
+          timeout: 20000 
+        }
+      );
+
+      const leadsInBatch = response.data.items;
+      
+      // Buscamos manualmente en el lote actual
+      for (const lead of leadsInBatch) {
+        const phoneField = lead.fields.find(f => f.external_id === 'telefono-2');
+        if (phoneField) {
+          for (const phoneValue of phoneField.values) {
+            const podioPhoneNumber = (phoneValue.value || '').replace(/\D/g, '');
+            const searchPhoneNumber = (phoneNumber || '').replace(/\D/g, '');
+            
+            if (podioPhoneNumber.includes(searchPhoneNumber)) {
+              // ¡Lo encontramos! Devolvemos este lead.
+              return [lead];
+            }
           }
         }
       }
+
+      // Si este lote tenía menos leads que el límite, significa que ya no hay más páginas.
+      if (leadsInBatch.length < limit) {
+        hasMore = false;
+      } else {
+        // Si no, nos preparamos para pedir la siguiente página.
+        offset += limit;
+      }
     }
 
-    // Si terminamos de revisar y no encontramos nada, devolvemos un array vacío.
+    // Si el bucle termina y no encontramos nada, devolvemos un array vacío.
     return [];
 
   } catch (err) {
     console.error("Error al buscar lead en Podio:", err.response ? err.response.data : err.message);
-    return []; // Si hay un error, devuelve un array vacío.
+    return [];
   }
 }
 
