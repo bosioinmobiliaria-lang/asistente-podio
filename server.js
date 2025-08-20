@@ -381,6 +381,30 @@ app.get("/", (_req, res) =>
   res.send("OK • GET /meta/fields, POST /contactos, GET /meta/fields/leads, POST /leads, POST /debug/leads/payload, GET /debug/env")
 );
 
+// ----------------------------------------
+// Webhook para WhatsApp (LÓGICA CONVERSACIONAL Y RÁPIDA v11.0)
+// ----------------------------------------
+const twilio = require("twilio");
+const MessagingResponse = twilio.twiml.MessagingResponse;
+
+const userStates = {}; // "Memoria" del bot
+
+// --- Mapas para las opciones de Podio (sin cambios) ---
+const VENDEDORES_MAP = {
+  'whatsapp:+5493571605532': 1,  // Diego Rodriguez
+  'whatsapp:+5493546560311': 9,  // Esteban Bosio
+  'whatsapp:+5493546490249': 2,  // Esteban Coll
+  'whatsapp:+5493546549847': 3,  // Maximiliano Perez
+  'whatsapp:+5493546452443': 10, // Gabriel Perez
+  'whatsapp:+5493546545121': 7,  // Carlos Perez
+  'whatsapp:+5493546513759': 8   // Santiago Bosio
+};
+const VENDEDOR_POR_DEFECTO_ID = 1;
+const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 }; // 1: Comprador, 2: Propietario
+const ORIGEN_CONTACTO_MAP = {
+  '1': 6, '2': 1, '3': 2, '4': 8, '5': 7, '6': 3, '7': 5, '8': 9, '9': 11, '10': 10, '11': 12
+};
+
 app.post("/whatsapp", async (req, res) => {
   const twiml = new MessagingResponse();
   let respuesta = "";
@@ -395,6 +419,7 @@ app.post("/whatsapp", async (req, res) => {
       respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
     
     } else if (currentState) {
+      // --- FLUJO ACTIVO: El usuario ya está en una conversación ---
       switch (currentState.step) {
         
         case 'awaiting_phone_to_check':
@@ -410,57 +435,82 @@ app.post("/whatsapp", async (req, res) => {
             const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
             const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
             const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
-            // Por ahora mantenemos la última actividad general. Ver punto #3 más abajo.
-            const lastActivityDays = calculateDaysSince(lead.last_event_on); 
-            respuesta = `✅ *Lead Encontrado*\n\n*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Última Actividad General:* ${lastActivityDays}`;
+            const creationDate = formatPodioDate(lead.created_on);
+            const lastActivityDays = calculateDaysSince(lead.last_event_on);
+            respuesta = `✅ *Lead Encontrado*\n\n*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
             delete userStates[numeroRemitente];
           } else {
-            // --- CAMBIO PARA OPTIMIZAR A 2 MENSAJES ---
-            currentState.step = 'awaiting_contact_info';
+            currentState.step = 'awaiting_creation_confirmation';
             currentState.data = {
                 phone: [{ type: "mobile", value: phoneToCheck }],
                 "telefono-busqueda": phoneToCheck
             };
-            respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\nPara crearlo como un nuevo **Contacto**, por favor enviame los siguientes datos, **cada uno en una línea separada**:\n\n1. Nombre y Apellido\n2. Tipo (1: Comprador, 2: Propietario)\n3. Origen (un número del 1 al 11)`;
+            respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo **Contacto**?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
           }
           break;
 
-        case 'awaiting_contact_info':
+        case 'awaiting_creation_confirmation':
+            if (mensajeRecibido === '1') {
+              // --- CAMBIO 1: Apuntamos al nuevo paso 'awaiting_name_and_type' ---
+              currentState.step = 'awaiting_name_and_type';
+              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto (1 para Comprador, 2 para Propietario)";
+            } else {
+              delete userStates[numeroRemitente];
+              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
+            }
+            break;
+
+        // --- CAMBIO 2: Nuevo paso que combina la recepción de Nombre y Tipo ---
+        case 'awaiting_name_and_type':
             const info = mensajeRecibido.split('\n').map(line => line.trim());
-            if (info.length < 3) {
-              respuesta = "❌ Faltan datos. Recordá enviarme el nombre, el tipo y el origen, cada uno en una nueva línea.";
+            if (info.length < 2) {
+              respuesta = "❌ Faltan datos. Recordá enviarme el Nombre en la primera línea y el Tipo (1 o 2) en la segunda.";
               break;
             }
-            const [nombre, tipoInput, origenInput] = info;
-            const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)]; // Tomamos solo el primer caracter por si escriben "1. ..."
-            const origenId = ORIGEN_CONTACTO_MAP[origenInput.match(/\d+/)?.[0]]; // Buscamos el primer número que aparezca
+            const [nombre, tipoInput] = info;
+            const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
 
-            if (!nombre || !tipoId || !origenId) {
-                let errorMsg = "❌ Hay un error en los datos.\n";
-                if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
-                if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
-                if (!origenId) errorMsg += "El *Origen* debe ser un número del 1 al 11.\n";
-                respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
-                break;
+            if (!nombre || !tipoId) {
+              let errorMsg = "❌ Hay un error en los datos.\n";
+              if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
+              if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
+              respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
+              break;
             }
-
+            
+            // Guardamos los datos recibidos
             currentState.data.title = nombre;
             currentState.data['tipo-de-contacto'] = [tipoId];
-            currentState.data['contact-type'] = [origenId];
-            const vendedorId = VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-            currentState.data['vendedor-asignado-2'] = [vendedorId];
-            currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
             
-            // --- ARREGLO CRÍTICO: LOG PARA VERIFICAR LA CREACIÓN ---
-            const createdItem = await createItemIn("contactos", currentState.data);
-            console.log('CONTACTO CREADO EN PODIO, RESPUESTA:', JSON.stringify(createdItem, null, 2));
+            // Construimos el resumen y la pregunta final
+            const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
+            respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
 
-            respuesta = `✅ ¡Perfecto! El contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
-            delete userStates[numeroRemitente];
+            currentState.step = 'awaiting_origin';
+            break;
+
+        // --- CAMBIO 3: Los pasos 'awaiting_name' y 'awaiting_type' ya no son necesarios ---
+
+        case 'awaiting_origin':
+            const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
+            if (!origenId) {
+              respuesta = "Opción no válida. Por favor, respondé con uno de los números de la lista.";
+            } else {
+              currentState.data['contact-type'] = [origenId];
+              const vendedorId = VENDEDORES_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+              currentState.data['vendedor-asignado-2'] = [vendedorId];
+              currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+              
+              // El error de carga lo vemos después, pero la llamada a la función se queda aquí
+              await createItemIn("contactos", currentState.data); 
+
+              respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
+              delete userStates[numeroRemitente];
+            }
             break;
       }
     } else {
-      // --- MENÚ PRINCIPAL ---
+      // --- MENÚ PRINCIPAL (Sin cambios) ---
       const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n*2.* Crear un Lead _(próximamente)_\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
       if (mensajeRecibido === '1') {
         userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
