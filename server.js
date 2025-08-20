@@ -171,64 +171,35 @@ async function getLeadsFieldsMeta() {
   return raw.fields || [];
 }
 
-// --- NUEVA FUNCIÓN DE BÚSQUEDA EN LEADS (CON PAGINACIÓN) ---
+// --- NUEVA FUNCIÓN DE BÚSQUEDA RÁPIDA EN LEADS ---
 async function searchLeadByPhone(phoneNumber) {
   const appId = process.env.PODIO_LEADS_APP_ID;
   const token = await getAppAccessTokenFor("leads");
-  let offset = 0;
-  const limit = 500; // Pedimos los leads en lotes grandes
-  let hasMore = true;
-
+  
   try {
-    while (hasMore) {
-      // Pedimos un lote de leads a Podio
-      const response = await axios.post(
-        `https://api.podio.com/item/app/${appId}/filter/`,
-        {
-          limit: limit,
-          offset: offset // Le decimos a Podio desde dónde empezar a contar
-        },
-        { 
-          headers: { Authorization: `OAuth2 ${token}` },
-          timeout: 40000 
+    // Usamos el external_id de tu nuevo campo de Texto: "telefono-busqueda"
+    const searchFieldExternalId = "telefono-busqueda"; 
+
+    const response = await axios.post(
+      `https://api.podio.com/item/app/${appId}/filter/`,
+      {
+        // Los campos de texto se buscan con un rango "desde" y "hasta"
+        filters: {
+          [searchFieldExternalId]: { "from": phoneNumber, "to": phoneNumber }
         }
-      );
-
-      const leadsInBatch = response.data.items;
-      
-      // Buscamos manualmente en el lote actual
-      for (const lead of leadsInBatch) {
-        const phoneField = lead.fields.find(f => f.external_id === 'telefono-2');
-        if (phoneField) {
-          for (const phoneValue of phoneField.values) {
-            const podioPhoneNumber = (phoneValue.value || '').replace(/\D/g, '');
-            const searchPhoneNumber = (phoneNumber || '').replace(/\D/g, '');
-            
-            if (podioPhoneNumber.includes(searchPhoneNumber)) {
-              // ¡Lo encontramos! Devolvemos este lead.
-              return [lead];
-            }
-          }
-        }
+      },
+      { 
+        headers: { Authorization: `OAuth2 ${token}` },
+        timeout: 15000 
       }
-
-      // Si este lote tenía menos leads que el límite, significa que ya no hay más páginas.
-      if (leadsInBatch.length < limit) {
-        hasMore = false;
-      } else {
-        // Si no, nos preparamos para pedir la siguiente página.
-        offset += limit;
-      }
-    }
-
-    // Si el bucle termina y no encontramos nada, devolvemos un array vacío.
-    return [];
-
+    );
+    return response.data.items;
   } catch (err) {
     console.error("Error al buscar lead en Podio:", err.response ? err.response.data : err.message);
     return [];
   }
 }
+
 
 // ----------------------------------------
 // Contactos - meta & creación
