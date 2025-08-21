@@ -410,11 +410,14 @@ const VENDEDORES_CONTACTOS_MAP = {
   'whatsapp:+5493546545121': 4,  // Carlos Perez
   'whatsapp:+5493546513759': 9   // Santiago Bosio
 };
-const VENDEDOR_POR_DEFECTO_ID = 1; // Usamos el ID de Diego como default
+const VENDEDOR_POR_DEFECTO_ID = 8; // Usamos el ID de Esteban como default
 const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 }; 
 const ORIGEN_CONTACTO_MAP = {
   '1': 6, '2': 1, '3': 2, '4': 8, '5': 7, '6': 3, '7': 5, '8': 9, '9': 11, '10': 10, '11': 12
 };
+
+// ✅ TU NÚMERO PARA ACTIVAR EL MODO DE PRUEBA
+const NUMERO_DE_PRUEBA = 'whatsapp:+5493546560311';
 
 app.post("/whatsapp", async (req, res) => {
   const twiml = new MessagingResponse();
@@ -425,116 +428,135 @@ app.post("/whatsapp", async (req, res) => {
     const numeroRemitente = req.body.From || "";
     let currentState = userStates[numeroRemitente];
 
-    if (mensajeRecibido.toLowerCase() === 'cancelar') {
-      delete userStates[numeroRemitente];
-      respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
-    
-    } else if (currentState) {
-      switch (currentState.step) {
-        
-        case 'awaiting_phone_to_check':
-          const phoneToCheck = mensajeRecibido.replace(/\D/g, '');
-          if (phoneToCheck.length < 9) {
-            respuesta = "El número parece muy corto. Por favor, envíalo sin el 0 y sin el 15 (ej: 351... ó 3546...).";
-            break;
-          }
-          const existingLeads = await searchLeadByPhone(phoneToCheck);
-          if (existingLeads.length > 0) {
-            // ... (Esta parte funciona bien, sin cambios)
-            const lead = existingLeads[0];
-            const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
-            const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
-            const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-            const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
-            const creationDate = formatPodioDate(lead.created_on);
-            const lastActivityDays = calculateDaysSince(lead.last_event_on);
-            respuesta = `✅ *Lead Encontrado*\n\n*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
-            delete userStates[numeroRemitente];
-          } else {
-            currentState.step = 'awaiting_creation_confirmation';
-            currentState.data = {
-                phone: [{ type: "mobile", value: phoneToCheck }],
-                "telefono-busqueda": phoneToCheck // Lo guardamos temporalmente aquí
-            };
-            respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
-          }
-          break;
+    // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
+    if (numeroRemitente === NUMERO_DE_PRUEBA) {
+      
+      // ===============================================================
+      // ===== MODO PRUEBA: ESTA LÓGICA SOLO LA VES VOS =============
+      // ===============================================================
+      
+      const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* Crear un Lead (EN DESARROLLO)\n\nEscribe *cancelar* para volver.";
 
-        case 'awaiting_creation_confirmation':
-            // ... (Sin cambios)
-            if (mensajeRecibido === '1') {
-              currentState.step = 'awaiting_name_and_type';
-              respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, *cada uno en una nueva línea*:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
-            } else {
-              delete userStates[numeroRemitente];
-              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
-            }
-            break;
-
-        case 'awaiting_name_and_type':
-            // ... (Sin cambios)
-            const info = mensajeRecibido.split('\n').map(line => line.trim());
-            if (info.length < 2) {
-              respuesta = "❌ Faltan datos. Recordá enviarme el Nombre en la primera línea y el Tipo (1 o 2) en la segunda.";
-              break;
-            }
-            const [nombre, tipoInput] = info;
-            const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
-
-            if (!nombre || !tipoId) {
-              let errorMsg = "❌ Hay un error en los datos.\n";
-              if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
-              if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
-              respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
-              break;
-            }
-            currentState.data.title = nombre;
-            currentState.data['tipo-de-contacto'] = [tipoId];
-            const telefono = currentState.data.phone[0].value;
-            const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
-            respuesta = `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
-            currentState.step = 'awaiting_origin';
-            break;
-
-        case 'awaiting_origin':
-            const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
-            if (!origenId) {
-              respuesta = "Opción no válida. Por favor, respondé con uno de los números de la lista.";
-            } else {
-              currentState.data['contact-type'] = [origenId];
-              const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-              currentState.data['vendedor-asignado-2'] = [vendedorId];
-              currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
-              
-              // ✅ SOLUCIÓN: Eliminamos el campo que no existe en la App de Contactos
-              // antes de enviarlo a Podio.
-              delete currentState.data['telefono-busqueda'];
-
-              await createItemIn("contactos", currentState.data); 
-
-              respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
-              delete userStates[numeroRemitente];
-            }
-            break;
-      }
-    } else {
-      const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
-      if (mensajeRecibido === '1') {
-        userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
-        respuesta = "Entendido. Por favor, enviame el *número de celular* que quieres verificar.";
+      // --- AQUÍ EMPIEZA A PROGRAMAR TU NUEVA FUNCIONALIDAD ---
+      // Por ejemplo:
+      if (mensajeRecibido.toLowerCase() === 'cancelar') {
+        delete userStates[numeroRemitente];
+        respuesta = "Operación de prueba cancelada.";
+      } else if (mensajeRecibido === '2') {
+        // Aquí comenzaría el flujo para crear un Lead
+        respuesta = "Iniciando nueva función: Crear Lead...";
+        // userStates[numeroRemitente] = { step: 'awaiting_lead_info' }; // etc.
       } else {
-        respuesta = menu;
+        // Aquí podés copiar la lógica de "Verificar Teléfono" si también querés probarla
+        respuesta = menuDePrueba;
+      }
+      // --- AQUÍ TERMINA EL ESPACIO PARA TU NUEVA FUNCIONALIDAD ---
+
+    } else {
+      
+      // ===============================================================
+      // ===== MODO ESTABLE: ESTA LÓGICA LA VEN LOS ASESORES =========
+      // ===============================================================
+      
+      // Este es el código que ya funciona y que no vamos a tocar.
+      if (mensajeRecibido.toLowerCase() === 'cancelar') {
+        delete userStates[numeroRemitente];
+        respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
+      
+      } else if (currentState) {
+        switch (currentState.step) {
+          case 'awaiting_phone_to_check':
+            const phoneToCheck = mensajeRecibido.replace(/\D/g, '');
+            if (phoneToCheck.length < 9) {
+              respuesta = "El número parece muy corto. Por favor, envíalo sin el 0 y sin el 15 (ej: 351... ó 3546...).";
+              break;
+            }
+            const existingLeads = await searchLeadByPhone(phoneToCheck);
+            if (existingLeads.length > 0) {
+              const lead = existingLeads[0];
+              const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
+              const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+              const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
+              const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
+              const creationDate = formatPodioDate(lead.created_on);
+              const lastActivityDays = calculateDaysSince(lead.last_event_on);
+              respuesta = `✅ *Lead Encontrado*\n\n*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
+              delete userStates[numeroRemitente];
+            } else {
+              currentState.step = 'awaiting_creation_confirmation';
+              currentState.data = {
+                  phone: [{ type: "mobile", value: phoneToCheck }],
+                  "telefono-busqueda": phoneToCheck
+              };
+              respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo **Contacto**?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
+            }
+            break;
+
+          case 'awaiting_creation_confirmation':
+              if (mensajeRecibido === '1') {
+                currentState.step = 'awaiting_name_and_type';
+                respuesta = "📝 Entendido. Por favor, enviame los siguientes datos, **cada uno en una nueva línea**:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto (1 para Comprador, 2 para Propietario)";
+              } else {
+                delete userStates[numeroRemitente];
+                respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
+              }
+              break;
+
+          case 'awaiting_name_and_type':
+              const info = mensajeRecibido.split('\n').map(line => line.trim());
+              if (info.length < 2) {
+                respuesta = "❌ Faltan datos. Recordá enviarme el Nombre en la primera línea y el Tipo (1 o 2) en la segunda.";
+                break;
+              }
+              const [nombre, tipoInput] = info;
+              const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
+              if (!nombre || !tipoId) {
+                let errorMsg = "❌ Hay un error en los datos.\n";
+                if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
+                if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
+                respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
+                break;
+              }
+              currentState.data.title = nombre;
+              currentState.data['tipo-de-contacto'] = [tipoId];
+              const telefono = currentState.data.phone[0].value;
+              const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
+              respuesta = `✅ **Datos recibidos:**\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Para terminar, por favor elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
+              currentState.step = 'awaiting_origin';
+              break;
+
+          case 'awaiting_origin':
+              const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
+              if (!origenId) {
+                respuesta = "Opción no válida. Por favor, respondé con uno de los números de la lista.";
+              } else {
+                currentState.data['contact-type'] = [origenId];
+                const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+                currentState.data['vendedor-asignado-2'] = [vendedorId];
+                currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+                delete currentState.data['telefono-busqueda'];
+                await createItemIn("contactos", currentState.data); 
+                respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* fue creado y asignado correctamente.`;
+                delete userStates[numeroRemitente];
+              }
+              break;
+        }
+      } else {
+        const menu = "Hola 👋, soy tu asistente de Podio. ¿Qué quieres hacer?\n\n*1.* Verificar Teléfono en Leads\n\nPor favor, responde solo con el número. Escribe *cancelar* en cualquier momento para volver aquí.";
+        if (mensajeRecibido === '1') {
+          userStates[numeroRemitente] = { action: 'verificar_crear_contacto', step: 'awaiting_phone_to_check' };
+          respuesta = "Entendido. Por favor, enviame el *número de celular* que quieres verificar.";
+        } else {
+          respuesta = menu;
+        }
       }
     }
   } catch (err) {
-    // ✅ MEJORA: Log de errores mucho más detallado
     console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
     if (err.response) {
-        // Esto captura errores específicos de la API de Podio
         console.error("Status Code:", err.response.status);
         console.error("Respuesta de Podio:", JSON.stringify(err.response.data, null, 2));
     } else {
-        // Esto captura otros errores (de red, de código, etc.)
         console.error("Error no relacionado con la API:", err.message);
         console.error(err.stack);
     }
