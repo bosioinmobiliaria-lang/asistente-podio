@@ -517,7 +517,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: NUEVO FLUJO UNIFICADO (v2) ================
+    // ===== MODO PRUEBA: FIX FINAL DEL ENLACE ======================
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar') {
         delete userStates[numeroRemitente];
@@ -546,7 +546,6 @@ app.post("/whatsapp", async (req, res) => {
                     break;
                 }
                 currentState.step = nextStep;
-                // Guardamos qué tipo de filtro final estamos esperando
                 currentState.finalFilterType = (['1', '3', '5'].includes(choice)) ? 'localidad' : 'precio';
                 respuesta = prompt;
                 break;
@@ -578,9 +577,9 @@ app.post("/whatsapp", async (req, res) => {
                         const title = prop.title;
                         const linkField = prop.fields.find(f => f.external_id === 'enlace-de-la-propiedad');
                         
-                        // ✅ SOLUCIÓN AL ERROR: Verificamos de forma segura si el enlace existe
+                        // ✅ SOLUCIÓN DEFINITIVA AL ERROR: Verificación en múltiples niveles
                         let link = 'Sin enlace web';
-                        if (linkField && linkField.values && linkField.values.length > 0) {
+                        if (linkField && linkField.values && linkField.values[0] && linkField.values[0].value && linkField.values[0].value.embed) {
                             link = linkField.values[0].value.embed.url;
                         }
                         
@@ -588,7 +587,7 @@ app.post("/whatsapp", async (req, res) => {
                     });
                     respuesta = results;
                 } else {
-                    respuesta = "Lo siento, no encontré propiedades que coincidan con tu búsqueda. 😔 Podés probar con otros filtros.";
+                    respuesta = "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔 Podés probar con otros filtros.";
                 }
                 delete userStates[numeroRemitente];
                 break;
