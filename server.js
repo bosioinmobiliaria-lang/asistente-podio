@@ -117,6 +117,20 @@ const TOKENS = {
   propiedades: { value: null, exp: 0 },
 };
 
+async function getItemDetails(itemId) {
+  // Esta función obtiene todos los detalles de un item específico.
+  const token = await getAppAccessTokenFor("propiedades");
+  try {
+    const { data } = await axios.get(`https://api.podio.com/item/${itemId}`, {
+      headers: { Authorization: `OAuth2 ${token}` },
+    });
+    return data;
+  } catch (err) {
+    console.error(`Error al obtener detalles del item ${itemId}:`, err.response ? err.response.data : err.message);
+    return null; // Devolvemos null si hay un error con un item específico
+  }
+}
+
 async function getAppAccessTokenFor(appName = "contactos") {
   const now = Date.now();
   if (TOKENS[appName].value && now < TOKENS[appName].exp - 30_000) {
@@ -149,23 +163,12 @@ async function searchProperties(filters) {
   const appId = process.env.PODIO_PROPIEDADES_APP_ID;
   const token = await getAppAccessTokenFor("propiedades");
 
-  // Filtro base: Siempre buscar solo las propiedades DISPONIBLES
-  const podioFilters = {
-    estado: [ ID_ESTADO_DISPONIBLE ]
-  };
+  const podioFilters = { estado: [ ID_ESTADO_DISPONIBLE ] };
 
-  // Agregamos los filtros que el usuario eligió
-  if (filters.precio) {
-    podioFilters['valor-de-la-propiedad'] = filters.precio;
-  }
-  if (filters.localidad) {
-    podioFilters['localidad'] = [ filters.localidad ];
-  }
-  if (filters.tipo) {
-    podioFilters['tipo-de-propiedad'] = [ filters.tipo ];
-  }
+  if (filters.precio) podioFilters['valor-de-la-propiedad'] = filters.precio;
+  if (filters.localidad) podioFilters['localidad'] = [ filters.localidad ];
+  if (filters.tipo) podioFilters['tipo-de-propiedad'] = [ filters.tipo ];
 
-  // ✅ "ESPÍA": Imprime en los logs de Render el filtro exacto que se envía a Podio
   console.log('--- FILTROS ENVIADOS A PODIO ---');
   console.log(JSON.stringify({ filters: podioFilters }, null, 2));
   console.log('---------------------------------');
@@ -175,7 +178,7 @@ async function searchProperties(filters) {
       `https://api.podio.com/item/app/${appId}/filter/`,
       {
         filters: podioFilters,
-        limit: 5, // Traemos un máximo de 5 resultados para no saturar el chat
+        limit: 20, // ✅ LÍMITE AUMENTADO A 20
         sort_by: "created_on",
         sort_desc: true
       },
@@ -524,7 +527,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: CON DIAGNÓSTICO FINAL =====================
+    // ===== MODO PRUEBA: BÚSQUEDA INTELIGENTE EN DOS PASOS ==========
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
@@ -532,77 +535,65 @@ app.post("/whatsapp", async (req, res) => {
     
     } else if (currentState) {
         switch (currentState.step) {
-            case 'awaiting_property_type':
-                // ... (sin cambios)
-                const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
-                if (!tipoId) {
-                    respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
+            case 'awaiting_initial_search_choice':
+                // ... (lógica sin cambios)
+                const choice = mensajeRecibido;
+                let nextStep = '';
+                let prompt = '';
+                if (['1', '2'].includes(choice)) currentState.filters.tipo = TIPO_PROPIEDAD_MAP['1'];
+                if (['3', '4'].includes(choice)) currentState.filters.tipo = TIPO_PROPIEDAD_MAP['2'];
+                if (['1', '3', '5'].includes(choice)) {
+                    nextStep = 'awaiting_final_filter';
+                    prompt = `📍 Perfecto, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
+                } else if (['2', '4', '6'].includes(choice)) {
+                    nextStep = 'awaiting_final_filter';
+                    prompt = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 90k\n*7.* 90k - 110k\n*8.* 110k - 150k\n*9.* 150k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
+                } else {
+                    respuesta = "Opción no válida. Por favor, elegí un número del 1 al 6.";
                     break;
                 }
-                currentState.filters.tipo = tipoId;
-                currentState.step = 'awaiting_filter_choice';
-                respuesta = `Perfecto. ¿Cómo querés filtrar?\n\n*1.* Por Localidad\n*2.* Por Precio\n*3.* Volver al menú anterior`;
-                break;
-
-            case 'awaiting_filter_choice':
-                const filterChoice = mensajeRecibido;
-                if (filterChoice === '1') { // Localidad
-                    currentState.step = 'awaiting_final_filter';
-                    currentState.finalFilterType = 'localidad';
-                    respuesta = `📍 Muy bien, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
-                } else if (filterChoice === '2') { // Precio
-                    currentState.step = 'awaiting_final_filter';
-                    currentState.finalFilterType = 'precio';
-                    // ✅ MENÚ DE PRECIOS ACTUALIZADO
-                    respuesta = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 90k\n*7.* 90k - 110k\n*8.* 110k - 150k\n*9.* 150k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
-                } else {
-                    respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
-                }
+                currentState.step = nextStep;
+                currentState.finalFilterType = (['1', '3', '5'].includes(choice)) ? 'localidad' : 'precio';
+                respuesta = prompt;
                 break;
 
             case 'awaiting_final_filter':
                 if (currentState.finalFilterType === 'localidad') {
-                    // ... (sin cambios)
                     const localidadId = LOCALIDAD_MAP[mensajeRecibido];
-                    if (!localidadId) {
-                        respuesta = "Opción no válida. Por favor, elegí un número de la lista de localidades.";
-                        break;
-                    }
+                    if (!localidadId) { respuesta = "Opción no válida..."; break; }
                     currentState.filters.localidad = localidadId;
-                } else { // precio
-                    // ... (sin cambios)
+                } else {
                     const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
-                    if (!precioRango) {
-                        respuesta = "Opción no válida. Por favor, elegí un número de la lista de precios.";
-                        break;
-                    }
+                    if (!precioRango) { respuesta = "Opción no válida..."; break; }
                     currentState.filters.precio = precioRango;
                 }
                 
-                respuesta = "🔎 Buscando propiedades... un momento por favor.";
-                const properties = await searchProperties(currentState.filters);
+                respuesta = "🔎 Buscando propiedades... (esto puede tardar unos segundos)";
                 
-                if (properties.length > 0) {
-                    let results = `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n`;
-                    properties.forEach((prop, index) => {
-                        // ✅ --- SÚPER ESPÍA DE DIAGNÓSTICO ---
-                        // Imprimirá la estructura completa de cada propiedad encontrada en los logs de Render
-                        console.log(`--- DEBUG DE PROPIEDAD #${index + 1} (Item ID: ${prop.item_id}) ---`);
-                        console.log(JSON.stringify(prop.fields, null, 2));
-                        console.log('----------------------------------------------------');
-                        
-                        const title = prop.title;
-                        const linkField = prop.fields.find(f => f.external_id === 'enlace-de-la-propiedad');
-                        const localidadField = prop.fields.find(f => f.external_id === 'localidad');
+                // --- PASO 1: BÚSQUEDA RÁPIDA DE IDs ---
+                const initialProperties = await searchProperties(currentState.filters);
+                
+                if (initialProperties.length > 0) {
+                    
+                    // --- PASO 2: OBTENER DETALLES COMPLETOS DE CADA PROPIEDAD ---
+                    const detailedPropertiesPromises = initialProperties.map(prop => getItemDetails(prop.item_id));
+                    const detailedProperties = await Promise.all(detailedPropertiesPromises);
 
+                    let results = `✅ ¡Encontré ${detailedProperties.length} propiedades disponibles!\n\n`;
+                    detailedProperties.forEach((prop, index) => {
+                        if (!prop) return; // Si hubo un error al obtener un item, lo saltamos
+
+                        const title = prop.title;
+                        const localidadField = prop.fields.find(f => f.external_id === 'localidad');
+                        const linkField = prop.fields.find(f => f.external_id === 'enlace-de-la-propiedad');
+                        
                         let localidadText = '';
                         if (localidadField && localidadField.values && localidadField.values[0]) {
-                            // Intentamos leer el texto. Si falla, el log nos dirá por qué.
                             localidadText = ` (${localidadField.values[0].value.text})`;
                         }
                         
                         let link = 'Sin enlace web';
-                        if (linkField && linkField.values && linkField.values[0] && linkField.values[0].value && linkField.values[0].value.embed) {
+                        if (linkField && linkField.values && linkField.values[0] && linkField.values[0].value.embed) {
                             link = linkField.values[0].value.embed.url;
                         }
                         
@@ -616,10 +607,11 @@ app.post("/whatsapp", async (req, res) => {
                 break;
         }
     } else {
+        // ... (menú de prueba sin cambios)
         const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
         if (mensajeRecibido === '2') {
-            userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-            respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
+            userStates[numeroRemitente] = { step: 'awaiting_initial_search_choice', filters: {} };
+            respuesta = `Perfecto, vamos a buscar una propiedad. ¿Qué buscás?\n\n*Lotes*\n*1.* Por Localidad\n*2.* Por Precio\n\n*Casas*\n*3.* Por Localidad\n*4.* Por Precio\n\n*Ver Todas*\n*5.* Por Localidad\n*6.* Por Precio`;
         } else {
             respuesta = menuDePrueba;
         }
