@@ -428,6 +428,13 @@ app.post("/whatsapp", async (req, res) => {
     const numeroRemitente = req.body.From || "";
     let currentState = userStates[numeroRemitente];
 
+    // ✅ PASO 1: Agregamos el "espía" para ver los números en el log de Render
+    console.log(`--- COMPARANDO NÚMEROS ---`);
+    console.log(`Número Recibido: [${numeroRemitente}]`);
+    console.log(`Número de Prueba Esperado: [${NUMERO_DE_PRUEBA}]`);
+    console.log(`¿Coinciden?: ${numeroRemitente === NUMERO_DE_PRUEBA}`);
+    console.log(`--------------------------`);
+
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
       
@@ -435,22 +442,18 @@ app.post("/whatsapp", async (req, res) => {
       // ===== MODO PRUEBA: ESTA LÓGICA SOLO LA VES VOS =============
       // ===============================================================
       
-      const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* Crear un Lead (EN DESARROLLO)\n\nEscribe *cancelar* para volver.";
+      // ✅ PASO 2: Actualizamos el texto del menú
+      const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
 
-      // --- AQUÍ EMPIEZA A PROGRAMAR TU NUEVA FUNCIONALIDAD ---
-      // Por ejemplo:
       if (mensajeRecibido.toLowerCase() === 'cancelar') {
         delete userStates[numeroRemitente];
         respuesta = "Operación de prueba cancelada.";
       } else if (mensajeRecibido === '2') {
-        // Aquí comenzaría el flujo para crear un Lead
-        respuesta = "Iniciando nueva función: Crear Lead...";
-        // userStates[numeroRemitente] = { step: 'awaiting_lead_info' }; // etc.
+        respuesta = "Iniciando nueva función: Búsqueda de Propiedades...";
+        // Aquí comenzaría el flujo para la nueva función
       } else {
-        // Aquí podés copiar la lógica de "Verificar Teléfono" si también querés probarla
-        respuesta = menuDePrueba;
+         respuesta = menuDePrueba;
       }
-      // --- AQUÍ TERMINA EL ESPACIO PARA TU NUEVA FUNCIONALIDAD ---
 
     } else {
       
@@ -458,12 +461,12 @@ app.post("/whatsapp", async (req, res) => {
       // ===== MODO ESTABLE: ESTA LÓGICA LA VEN LOS ASESORES =========
       // ===============================================================
       
-      // Este es el código que ya funciona y que no vamos a tocar.
+      // (Esta sección no se toca, es el código que ya funciona para todos)
       if (mensajeRecibido.toLowerCase() === 'cancelar') {
         delete userStates[numeroRemitente];
         respuesta = "Operación cancelada. Volviendo al menú principal. 👋";
-      
       } else if (currentState) {
+        // ... (todo el switch-case de los asesores va aquí, sin cambios)
         switch (currentState.step) {
           case 'awaiting_phone_to_check':
             const phoneToCheck = mensajeRecibido.replace(/\D/g, '');
@@ -567,6 +570,7 @@ app.post("/whatsapp", async (req, res) => {
   res.writeHead(200, { "Content-Type": "text/xml" });
   res.end(twiml.toString());
 });
+
 
 
 // ----------------------------------------
