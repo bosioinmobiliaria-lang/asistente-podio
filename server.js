@@ -164,7 +164,11 @@ async function searchProperties(filters) {
   if (filters.tipo) {
     podioFilters['tipo-de-propiedad'] = [ filters.tipo ];
   }
-  // Se pueden agregar más filtros aquí (ej: gas natural, etc.)
+
+  // ✅ "ESPÍA": Imprime en los logs de Render el filtro exacto que se envía a Podio
+  console.log('--- FILTROS ENVIADOS A PODIO ---');
+  console.log(JSON.stringify({ filters: podioFilters }, null, 2));
+  console.log('---------------------------------');
 
   try {
     const response = await axios.post(
@@ -513,7 +517,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: LÓGICA PARA "BUSCAR PROPIEDAD" =============
+    // ===== MODO PRUEBA: NUEVO FLUJO "BUSCAR PROPIEDAD" =============
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar') {
         delete userStates[numeroRemitente];
@@ -521,41 +525,6 @@ app.post("/whatsapp", async (req, res) => {
     
     } else if (currentState) {
         switch (currentState.step) {
-            case 'awaiting_filter_choice':
-                const filterChoice = mensajeRecibido;
-                if (filterChoice === '1') { // Localidad
-                    currentState.step = 'awaiting_location';
-                    respuesta = `📍 Perfecto, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
-                } else if (filterChoice === '2') { // Precio
-                    currentState.step = 'awaiting_price';
-                    respuesta = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 80k - 90k\n*6.* 90k - 110k\n*7.* 110k - 150k\n*8.* 150k - 200k\n*9.* 200k - 300k\n*10.* 300k - 500k\n*11.* +500k`;
-                } else {
-                    respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
-                }
-                break;
-
-            case 'awaiting_location':
-                const localidadId = LOCALIDAD_MAP[mensajeRecibido];
-                if (!localidadId) {
-                    respuesta = "Opción no válida. Por favor, elegí un número de la lista.";
-                    break;
-                }
-                currentState.filters.localidad = localidadId;
-                currentState.step = 'awaiting_property_type';
-                respuesta = `🏡 Ok. En esa localidad, ¿qué tipo de propiedad buscás?\n\n*1.* Lote\n*2.* Casa\n*3.* Ver Todas`;
-                break;
-            
-            case 'awaiting_price':
-                const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
-                if (!precioRango) {
-                    respuesta = "Opción no válida. Por favor, elegí un número de la lista.";
-                    break;
-                }
-                currentState.filters.precio = precioRango;
-                currentState.step = 'awaiting_property_type';
-                respuesta = `🏡 Ok. En ese rango de precios, ¿qué tipo de propiedad buscás?\n\n*1.* Lote\n*2.* Casa\n*3.* Ver Todas`;
-                break;
-
             case 'awaiting_property_type':
                 const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
                 if (mensajeRecibido !== '3' && !tipoId) {
@@ -565,22 +534,56 @@ app.post("/whatsapp", async (req, res) => {
                 if (tipoId) {
                     currentState.filters.tipo = tipoId;
                 }
+                currentState.step = 'awaiting_filter_choice';
+                respuesta = `Perfecto. ¿Cómo querés filtrar?\n\n*1.* Por Localidad\n*2.* Por Precio`;
+                break;
+
+            case 'awaiting_filter_choice':
+                const filterChoice = mensajeRecibido;
+                if (filterChoice === '1') { // Localidad
+                    currentState.step = 'awaiting_location';
+                    respuesta = `📍 Muy bien, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
+                } else if (filterChoice === '2') { // Precio
+                    currentState.step = 'awaiting_price';
+                    respuesta = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 80k - 90k\n*6.* 90k - 110k\n*7.* 110k - 150k\n*8.* 150k - 200k\n*9.* 200k - 300k\n*10.* 300k - 500k\n*11.* +500k`;
+                } else {
+                    respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
+                }
+                break;
+
+            case 'awaiting_location':
+            case 'awaiting_price':
+                if (currentState.step === 'awaiting_location') {
+                    const localidadId = LOCALIDAD_MAP[mensajeRecibido];
+                    if (!localidadId) {
+                        respuesta = "Opción no válida. Por favor, elegí un número de la lista.";
+                        break;
+                    }
+                    currentState.filters.localidad = localidadId;
+                } else { // awaiting_price
+                    const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
+                    if (!precioRango) {
+                        respuesta = "Opción no válida. Por favor, elegí un número de la lista.";
+                        break;
+                    }
+                    currentState.filters.precio = precioRango;
+                }
                 
                 // --- BÚSQUEDA FINAL ---
                 respuesta = "🔎 Buscando propiedades... un momento por favor.";
                 const properties = await searchProperties(currentState.filters);
                 
                 if (properties.length > 0) {
-                    let results = "✅ ¡Encontré estas propiedades disponibles!\n\n";
-                    properties.forEach(prop => {
+                    let results = `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n`;
+                    properties.forEach((prop, index) => {
                         const title = prop.title;
                         const linkField = prop.fields.find(f => f.external_id === 'enlace-de-la-propiedad');
-                        const link = linkField ? linkField.values[0].value.embed.url : 'Sin enlace';
-                        results += `*${title}*\n${link}\n\n`;
+                        const link = linkField ? linkField.values[0].value.embed.url : 'Sin enlace web';
+                        results += `*${index + 1}. ${title}*\n${link}\n\n`;
                     });
                     respuesta = results;
                 } else {
-                    respuesta = "Lo siento, no encontré propiedades que coincidan con tu búsqueda. 😔";
+                    respuesta = "Lo siento, no encontré propiedades que coincidan con tu búsqueda. 😔 Podés probar con otros filtros.";
                 }
                 delete userStates[numeroRemitente];
                 break;
@@ -588,10 +591,10 @@ app.post("/whatsapp", async (req, res) => {
     } else {
         const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
         if (mensajeRecibido === '2') {
-            userStates[numeroRemitente] = { step: 'awaiting_filter_choice', filters: {} };
-            respuesta = "Perfecto, vamos a buscar una propiedad. ¿Cómo preferís empezar?\n\n*1.* Por Localidad\n*2.* Por Precio";
+            userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
+            respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* Lote\n*2.* Casa\n*3.* Ver Todas`;
         } else {
-            // Aquí iría la lógica del "Verificar Teléfono" si querés mantenerla en modo prueba
+            // Lógica del "Verificar Teléfono" iría aquí si la necesitás en modo prueba
             respuesta = menuDePrueba;
         }
     }
