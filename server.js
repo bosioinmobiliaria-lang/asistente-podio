@@ -527,7 +527,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: VERSIÓN FINAL CORREGIDA ====================
+    // ===== MODO PRUEBA: AJUSTES FINALES DE FORMATO Y UX ============
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
@@ -584,17 +584,17 @@ app.post("/whatsapp", async (req, res) => {
                         const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
                         const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
                         
-                        const valor = valorField ? `Valor: u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}` : 'Valor no especificado';
-                        const localidad = localidadField ? `Localidad: ${localidadField.values[0].value}` : 'Localidad no especificada';
+                        // ✅ AJUSTE DE FORMATO FINAL
+                        const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
                         
-                        // ✅ SOLUCIÓN DEFINITIVA: Extraemos la URL del código HTML
-                        let link = 'Sin enlace web';
-                        if (linkField && linkField.values[0].value) {
-                            const match = linkField.values[0].value.match(/href="([^"]+)"/);
-                            if (match && match[1]) {
-                                link = match[1];
-                            }
+                        let localidad = 'Localidad no especificada';
+                        if (localidadField && localidadField.values[0].value) {
+                            // Limpiamos el HTML y aplicamos formato
+                            const localidadLimpia = localidadField.values[0].value.replace(/<[^>]*>?/gm, '');
+                            localidad = `📍 Localidad: *${localidadLimpia}*`;
                         }
+                        
+                        const link = linkField ? linkField.values[0].value : 'Sin enlace web';
 
                         results += `*${index + 1}. ${title}*\n${valor}\n${localidad}\n${link}\n\n`;
                     });
@@ -609,7 +609,6 @@ app.post("/whatsapp", async (req, res) => {
         const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
         if (mensajeRecibido === '2') {
             userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-            // ✅ MENÚ RESTAURADO CON EMOJIS
             respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
         } else {
             respuesta = menuDePrueba;
@@ -618,6 +617,7 @@ app.post("/whatsapp", async (req, res) => {
 } else {
     // ... (El código de los asesores en el bloque ELSE se mantiene igual)
 }
+
 
   } catch (err) {
     console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
