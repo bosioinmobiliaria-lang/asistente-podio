@@ -527,7 +527,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: VERSIÓN FINAL CORREGIDA ====================
+    // ===== MODO PRUEBA: MEJORAS FINALES DE UX ======================
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
@@ -536,7 +536,6 @@ app.post("/whatsapp", async (req, res) => {
     } else if (currentState) {
         switch (currentState.step) {
             case 'awaiting_property_type':
-                // ✅ ERROR CORREGIDO: TIPO_PROPIEDAD_MAP
                 const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
                 if (!tipoId) {
                     respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
@@ -544,7 +543,8 @@ app.post("/whatsapp", async (req, res) => {
                 }
                 currentState.filters.tipo = tipoId;
                 currentState.step = 'awaiting_filter_choice';
-                respuesta = `Perfecto. ¿Cómo querés filtrar?\n\n*1.* Por Localidad\n*2.* Por Precio\n*3.* Volver al menú anterior`;
+                // ✅ MEJORA 1: Emojis en el menú de filtros
+                respuesta = `Perfecto. ¿Cómo querés filtrar?\n\n*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior`;
                 break;
 
             case 'awaiting_filter_choice':
@@ -556,7 +556,6 @@ app.post("/whatsapp", async (req, res) => {
                 } else if (filterChoice === '2') { // Precio
                     currentState.step = 'awaiting_final_filter';
                     currentState.finalFilterType = 'precio';
-                    // ✅ MENÚ DE PRECIOS ACTUALIZADO
                     respuesta = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
                 } else {
                     respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
@@ -585,7 +584,8 @@ app.post("/whatsapp", async (req, res) => {
                     respuesta = message;
                     
                     if (hasMore) {
-                        respuesta += `\n\nSe encontraron más propiedades. ¿Querés ver las siguientes?\n*1.* Sí\n*2.* No`;
+                        // ✅ MEJORA 2: Nuevo menú de opciones avanzadas
+                        respuesta += `\n\n🤔 ¿Qué querés hacer ahora?\n\n*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal`;
                         currentState.step = 'awaiting_more_results';
                     } else {
                         delete userStates[numeroRemitente];
@@ -597,20 +597,41 @@ app.post("/whatsapp", async (req, res) => {
                 break;
 
             case 'awaiting_more_results':
-                if (mensajeRecibido === '1') {
+                const moreChoice = mensajeRecibido;
+                if (moreChoice === '1') { // Ver siguientes
                     currentState.searchIndex += 5;
                     const { message, hasMore } = formatResults(currentState.searchResults, currentState.searchIndex);
                     respuesta = message;
 
                     if (hasMore) {
-                        respuesta += `\n\n¿Ver más?\n*1.* Sí\n*2.* No`;
+                        respuesta += `\n\n🤔 ¿Qué querés hacer ahora?\n\n*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal`;
                     } else {
                         respuesta += "\n\nNo hay más propiedades para mostrar.";
                         delete userStates[numeroRemitente];
                     }
-                } else {
-                    respuesta = "Ok, finalizando búsqueda.";
+                } else if (moreChoice === '2') { // Finalizar
+                    respuesta = "Ok, búsqueda finalizada. ¡Éxitos! 👍";
                     delete userStates[numeroRemitente];
+                } else if (moreChoice === '3') { // Nueva búsqueda (mismo filtro)
+                    // Limpiamos el filtro anterior (precio o localidad)
+                    delete currentState.filters[currentState.finalFilterType];
+                    currentState.step = 'awaiting_final_filter';
+                    // Reenviamos el menú correspondiente
+                    if (currentState.finalFilterType === 'localidad') {
+                        respuesta = `📍 Muy bien, elegí la nueva localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
+                    } else {
+                        respuesta = `💰 Entendido, elegí el nuevo rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
+                    }
+                } else if (moreChoice === '4') { // Otro filtro
+                    delete currentState.filters.precio;
+                    delete currentState.filters.localidad;
+                    currentState.step = 'awaiting_filter_choice';
+                    respuesta = `Perfecto. ¿Cómo querés filtrar ahora?\n\n*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior`;
+                } else if (moreChoice === '5') { // Volver al menú principal
+                    delete userStates[numeroRemitente];
+                    respuesta = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
+                } else {
+                    respuesta = "Opción no válida. Por favor, elegí un número del 1 al 5.";
                 }
                 break;
         }
@@ -618,7 +639,6 @@ app.post("/whatsapp", async (req, res) => {
         const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
         if (mensajeRecibido === '2') {
             userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-            // ✅ MENÚ RESTAURADO CON EMOJIS
             respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
         } else {
             respuesta = menuDePrueba;
@@ -626,40 +646,6 @@ app.post("/whatsapp", async (req, res) => {
     }
 } else {
     // ... (El código de los asesores en el bloque ELSE se mantiene igual)
-}
-
-// La función de ayuda 'formatResults' no necesita cambios y debe estar fuera del webhook
-function formatResults(properties, startIndex, batchSize = 5) {
-    // ... (código de la función sin cambios)
-    const batch = properties.slice(startIndex, startIndex + batchSize);
-    let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
-
-    batch.forEach((prop, index) => {
-        const title = prop.title;
-        const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-        const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-        const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
-        
-        const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
-        const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '') : 'No especificada';
-        const localidad = `📍 Localidad: *${localidadLimpia}*`;
-        
-        let link = 'Sin enlace web';
-        if (linkField && linkField.values[0].value) {
-            const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
-            if (match && match[1]) {
-                link = match[1];
-            }
-        }
-
-        message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
-        if (index < batch.length - 1) {
-            message += '\n\n----------\n\n';
-        }
-    });
-
-    const hasMore = (startIndex + batchSize) < properties.length;
-    return { message: message.trim(), hasMore };
 }
 
 
