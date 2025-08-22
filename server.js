@@ -527,7 +527,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: AJUSTES FINALES DE PRESENTACIÓN ============
+    // ===== MODO PRUEBA: CON PAGINACIÓN DE RESULTADOS ===============
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
@@ -536,7 +536,7 @@ app.post("/whatsapp", async (req, res) => {
     } else if (currentState) {
         switch (currentState.step) {
             case 'awaiting_property_type':
-                const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
+                const tipoId = TIPO_PROPIEDED_MAP[mensajeRecibido];
                 if (!tipoId) {
                     respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
                     break;
@@ -576,44 +576,43 @@ app.post("/whatsapp", async (req, res) => {
                 const properties = await searchProperties(currentState.filters);
                 
                 if (properties.length > 0) {
-                    let results = `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n`;
-                    properties.forEach((prop, index) => {
-                        const title = prop.title;
-                        
-                        const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-                        const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-                        const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
-                        
-                        const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
-                        
-                        let localidad = 'Localidad no especificada';
-                        if (localidadField && localidadField.values[0].value) {
-                            const localidadLimpia = localidadField.values[0].value.replace(/<[^>]*>?/gm, '');
-                            localidad = `📍 Localidad: *${localidadLimpia}*`;
-                        }
-                        
-                        // ✅ SOLUCIÓN MÁS ROBUSTA PARA EL ENLACE
-                        let link = 'Sin enlace web';
-                        if (linkField && linkField.values[0].value) {
-                            const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
-                            if (match && match[1]) {
-                                link = match[1];
-                            }
-                        }
-
-                        results += `*${index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
-
-                        // ✅ MEJORA DE ESPACIADO
-                        // Agregamos un separador, pero no en el último elemento
-                        if (index < properties.length - 1) {
-                            results += '\n\n----------\n\n';
-                        }
-                    });
-                    respuesta = results.trim();
+                    // Guardamos todos los resultados y el índice actual en la memoria del usuario
+                    currentState.searchResults = properties;
+                    currentState.searchIndex = 0;
+                    
+                    // Enviamos el primer lote
+                    const { message, hasMore } = formatResults(currentState.searchResults, currentState.searchIndex);
+                    respuesta = message;
+                    
+                    if (hasMore) {
+                        respuesta += `\n\nSe encontraron más propiedades. ¿Querés ver las siguientes?\n*1.* Sí\n*2.* No`;
+                        currentState.step = 'awaiting_more_results';
+                    } else {
+                        delete userStates[numeroRemitente];
+                    }
                 } else {
-                    respuesta = "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔 Podés probar con otros filtros.";
+                    respuesta = "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔";
+                    delete userStates[numeroRemitente];
                 }
-                delete userStates[numeroRemitente];
+                break;
+
+            case 'awaiting_more_results':
+                if (mensajeRecibido === '1') {
+                    // Incrementamos el índice para el próximo lote
+                    currentState.searchIndex += 5;
+                    const { message, hasMore } = formatResults(currentState.searchResults, currentState.searchIndex);
+                    respuesta = message;
+
+                    if (hasMore) {
+                        respuesta += `\n\n¿Ver más?\n*1.* Sí\n*2.* No`;
+                    } else {
+                        respuesta += "\n\nNo hay más propiedades para mostrar.";
+                        delete userStates[numeroRemitente];
+                    }
+                } else {
+                    respuesta = "Ok, finalizando búsqueda.";
+                    delete userStates[numeroRemitente];
+                }
                 break;
         }
     } else {
@@ -629,6 +628,38 @@ app.post("/whatsapp", async (req, res) => {
     // ... (El código de los asesores en el bloque ELSE se mantiene igual)
 }
 
+// ✅ NUEVA FUNCIÓN DE AYUDA PARA FORMATEAR LOS RESULTADOS
+function formatResults(properties, startIndex, batchSize = 5) {
+    const batch = properties.slice(startIndex, startIndex + batchSize);
+    let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
+
+    batch.forEach((prop, index) => {
+        const title = prop.title;
+        const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+        const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+        const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
+        
+        const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
+        const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '') : 'No especificada';
+        const localidad = `📍 Localidad: *${localidadLimpia}*`;
+        
+        let link = 'Sin enlace web';
+        if (linkField && linkField.values[0].value) {
+            const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
+            if (match && match[1]) {
+                link = match[1];
+            }
+        }
+
+        message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
+        if (index < batch.length - 1) {
+            message += '\n\n----------\n\n';
+        }
+    });
+
+    const hasMore = (startIndex + batchSize) < properties.length;
+    return { message: message.trim(), hasMore };
+}
 
 
   } catch (err) {
