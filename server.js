@@ -527,40 +527,33 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: VERSIÓN FINAL CORREGIDA ====================
+    // ===== MODO PRUEBA: LEYENDO IDs CORREGIDOS =====================
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
-        // Mandamos al menú principal del modo prueba
         respuesta = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
     
     } else if (currentState) {
         switch (currentState.step) {
-            case 'awaiting_property_type':
-                const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
-                if (!tipoId) {
-                    respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
+            case 'awaiting_initial_search_choice':
+                const choice = mensajeRecibido;
+                let nextStep = '';
+                let prompt = '';
+                if (['1', '2'].includes(choice)) currentState.filters.tipo = TIPO_PROPIEDAD_MAP['1'];
+                if (['3', '4'].includes(choice)) currentState.filters.tipo = TIPO_PROPIEDAD_MAP['2'];
+                if (['1', '3', '5'].includes(choice)) {
+                    nextStep = 'awaiting_final_filter';
+                    prompt = `📍 Perfecto, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
+                } else if (['2', '4', '6'].includes(choice)) {
+                    nextStep = 'awaiting_final_filter';
+                    prompt = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
+                } else {
+                    respuesta = "Opción no válida. Por favor, elegí un número del 1 al 6.";
                     break;
                 }
-                currentState.filters.tipo = tipoId;
-                currentState.step = 'awaiting_filter_choice';
-                respuesta = `Perfecto. ¿Cómo querés filtrar?\n\n*1.* Por Localidad\n*2.* Por Precio\n*3.* Volver al menú anterior`;
-                break;
-
-            case 'awaiting_filter_choice':
-                const filterChoice = mensajeRecibido;
-                if (filterChoice === '1') { // Localidad
-                    currentState.step = 'awaiting_final_filter';
-                    currentState.finalFilterType = 'localidad';
-                    respuesta = `📍 Muy bien, elegí la localidad:\n\n*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio`;
-                } else if (filterChoice === '2') { // Precio
-                    currentState.step = 'awaiting_final_filter';
-                    currentState.finalFilterType = 'precio';
-                    // ✅ MENÚ DE PRECIOS ACTUALIZADO
-                    respuesta = `💰 Entendido, elegí un rango de precios (en USD):\n\n*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k`;
-                } else {
-                    respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
-                }
+                currentState.step = nextStep;
+                currentState.finalFilterType = (['1', '3', '5'].includes(choice)) ? 'localidad' : 'precio';
+                respuesta = prompt;
                 break;
 
             case 'awaiting_final_filter':
@@ -574,36 +567,26 @@ app.post("/whatsapp", async (req, res) => {
                     currentState.filters.precio = precioRango;
                 }
                 
-                respuesta = "🔎 Buscando propiedades... (esto puede tardar unos segundos)";
+                respuesta = "🔎 Buscando propiedades...";
+                const properties = await searchProperties(currentState.filters);
                 
-                const initialProperties = await searchProperties(currentState.filters);
-                
-                if (initialProperties.length > 0) {
-                    const detailedPropertiesPromises = initialProperties.map(prop => getItemDetails(prop.item_id));
-                    const detailedProperties = await Promise.all(detailedPropertiesPromises);
-
-                    let results = `✅ ¡Encontré ${detailedProperties.length} propiedades disponibles!\n\n`;
-                    detailedProperties.forEach((prop, index) => {
-                        if (!prop) return;
-
+                if (properties.length > 0) {
+                    let results = `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n`;
+                    properties.forEach((prop, index) => {
                         const title = prop.title;
-                        const localidadField = prop.fields.find(f => f.external_id === 'localidad');
-                        const linkField = prop.fields.find(f => f.external_id === 'enlace-de-la-propiedad');
                         
-                        let localidadText = '';
-                        if (localidadField && localidadField.values.length > 0) {
-                            localidadText = ` (${localidadField.values[0].value.text})`;
-                        }
+                        // ✅ IDs CORREGIDOS
+                        const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+                        const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+                        const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
                         
-                        // ✅ FIX DEFINITIVO: Lógica 100% segura para extraer el enlace
-                        let link = 'Sin enlace web';
-                        if (linkField && linkField.values.length > 0 && linkField.values[0].value && linkField.values[0].value.embed) {
-                            link = linkField.values[0].value.embed.url;
-                        }
-                        
-                        results += `*${index + 1}. ${title}${localidadText}*\n${link}\n\n`;
+                        const valor = valorField ? `Valor: u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}` : 'Valor no especificado';
+                        const localidad = localidadField ? `Localidad: ${localidadField.values[0].value}` : 'Localidad no especificada';
+                        const link = linkField ? linkField.values[0].value : 'Sin enlace web';
+
+                        results += `*${index + 1}. ${title}*\n${valor}\n${localidad}\n${link}\n\n`;
                     });
-                    respuesta = results;
+                    respuesta = results.trim();
                 } else {
                     respuesta = "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔 Podés probar con otros filtros.";
                 }
@@ -613,11 +596,9 @@ app.post("/whatsapp", async (req, res) => {
     } else {
         const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
         if (mensajeRecibido === '2') {
-            userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-            // ✅ MENÚ RESTAURADO CON EMOJIS
-            respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
+            userStates[numeroRemitente] = { step: 'awaiting_initial_search_choice', filters: {} };
+            respuesta = `Perfecto, vamos a buscar una propiedad. ¿Qué buscás?\n\n*Lotes*\n*1.* Por Localidad\n*2.* Por Precio\n\n*Casas*\n*3.* Por Localidad\n*4.* Por Precio\n\n*Ver Todas*\n*5.* Por Localidad\n*6.* Por Precio`;
         } else {
-            // Lógica del "Verificar Teléfono" iría aquí
             respuesta = menuDePrueba;
         }
     }
