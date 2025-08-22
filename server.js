@@ -524,18 +524,111 @@ app.post("/whatsapp", async (req, res) => {
     console.log(`¿Coinciden?: ${numeroRemitente === NUMERO_DE_PRUEBA}`);
     console.log(`--------------------------`);
 
-    // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
-    if (numeroRemitente === NUMERO_DE_PRUEBA) {
-    // ===============================================================
-    // ===== MODO PRUEBA: MEJORAS FINALES DE UX ======================
-    // ===============================================================
+    if (true) {
+
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
-        respuesta = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
-    
+        respuesta = "Hola 👋.\n\n*1.* Verificar Teléfono en Leads\n*2.* 🔎 Buscar una propiedad\n\nEscribe *cancelar* para volver.";
+  
     } else if (currentState) {
         switch (currentState.step) {
-            case 'awaiting_property_type':
+            case 'awaiting_phone_to_check': {
+  const phoneToCheck = mensajeRecibido.replace(/\D/g, '');
+  if (phoneToCheck.length < 9) {
+    respuesta = "El número parece muy corto. Enviá sin 0 y sin 15 (ej: 351... ó 3546...).";
+    break;
+  }
+
+  const existingLeads = await searchLeadByPhone(phoneToCheck);
+
+  if (existingLeads.length > 0) {
+    const lead = existingLeads[0];
+    const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
+    const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+    const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
+    const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
+    const creationDate = formatPodioDate(lead.created_on);
+    const lastActivityDays = calculateDaysSince(lead.last_event_on);
+
+    respuesta = `✅ *Lead Encontrado*\n\n*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
+    delete userStates[numeroRemitente];
+  } else {
+    currentState.step = 'awaiting_creation_confirmation';
+    currentState.data = {
+      phone: [{ type: "mobile", value: phoneToCheck }],
+      "telefono-busqueda": phoneToCheck // temporal, para el lead-text-search
+    };
+    respuesta = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
+  }
+  break;
+}
+
+case 'awaiting_creation_confirmation': {
+  if (mensajeRecibido === '1') {
+    currentState.step = 'awaiting_name_and_type';
+    respuesta = "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
+  } else {
+    delete userStates[numeroRemitente];
+    respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
+  }
+  break;
+}
+
+case 'awaiting_name_and_type': {
+  const info = mensajeRecibido.split('\n').map(line => line.trim());
+  if (info.length < 2) {
+    respuesta = "❌ Faltan datos. Primera línea: Nombre. Segunda línea: Tipo (1 o 2).";
+    break;
+  }
+
+  const [nombre, tipoInputRaw] = info;
+  const tipoInput = (tipoInputRaw || '').trim();
+  const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
+
+  if (!nombre || !tipoId) {
+    let errorMsg = "❌ Hay un error en los datos.\n";
+    if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
+    if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
+    respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
+    break;
+  }
+
+  currentState.data.title = nombre;
+  currentState.data['tipo-de-contacto'] = [tipoId];
+
+  const telefono = currentState.data.phone[0].value;
+  const tipoTexto = tipoId === 1 ? 'Comprador' : 'Propietario';
+
+  respuesta = `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n🌎 Elegí el *origen del contacto*:\n\n*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo`;
+
+  currentState.step = 'awaiting_origin';
+  break;
+}
+
+case 'awaiting_origin': {
+  const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
+  if (!origenId) {
+    respuesta = "Opción no válida. Respondé con uno de los números de la lista.";
+    break;
+  }
+
+  currentState.data['contact-type'] = [origenId];
+
+  // Asignación automática de vendedor según el número que escribe
+  const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+  currentState.data['vendedor-asignado-2'] = [vendedorId];
+  currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+
+  // Este campo no existe en la App de Contactos, lo eliminamos antes de crear
+  delete currentState.data['telefono-busqueda'];
+
+  await createItemIn("contactos", currentState.data);
+
+  respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* creado y asignado correctamente.`;
+  delete userStates[numeroRemitente];
+  break;
+}
+case 'awaiting_property_type':
                 const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
                 if (!tipoId) {
                     respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
@@ -636,13 +729,18 @@ app.post("/whatsapp", async (req, res) => {
                 break;
         }
     } else {
-        const menuDePrueba = "Hola 👋, (MODO PRUEBA).\n\n*1.* Verificar Teléfono\n*2.* 🔎 Buscar una propiedad (NUEVO)\n\nEscribe *cancelar* para volver.";
-        if (mensajeRecibido === '2') {
-            userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-            respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
-        } else {
-            respuesta = menuDePrueba;
-        }
+        const menuDePrueba = "Hola 👋.\n\n*1.* Verificar Teléfono en Leads\n*2.* 🔎 Buscar una propiedad\n\nEscribe *cancelar* para volver.";
+
+if (mensajeRecibido === '1') {
+    userStates[numeroRemitente] = { step: 'awaiting_phone_to_check' };
+    respuesta = "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...).";
+} else if (mensajeRecibido === '2') {
+    userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
+    respuesta = `🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\nEscribe *volver* para ir al menú anterior.`;
+} else {
+    respuesta = menuDePrueba;
+}
+
     }
 } else {
     // ... (El código de los asesores en el bloque ELSE se mantiene igual)
