@@ -527,7 +527,7 @@ app.post("/whatsapp", async (req, res) => {
     // --- LÓGICA DEL "PORTERO": Revisa si sos vos o un asesor ---
     if (numeroRemitente === NUMERO_DE_PRUEBA) {
     // ===============================================================
-    // ===== MODO PRUEBA: AJUSTES FINALES DE FORMATO Y UX ============
+    // ===== MODO PRUEBA: AJUSTES FINALES DE PRESENTACIÓN ============
     // ===============================================================
     if (mensajeRecibido.toLowerCase() === 'cancelar' || mensajeRecibido.toLowerCase() === 'volver') {
         delete userStates[numeroRemitente];
@@ -584,19 +584,30 @@ app.post("/whatsapp", async (req, res) => {
                         const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
                         const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
                         
-                        // ✅ AJUSTE DE FORMATO FINAL
                         const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
                         
                         let localidad = 'Localidad no especificada';
                         if (localidadField && localidadField.values[0].value) {
-                            // Limpiamos el HTML y aplicamos formato
                             const localidadLimpia = localidadField.values[0].value.replace(/<[^>]*>?/gm, '');
                             localidad = `📍 Localidad: *${localidadLimpia}*`;
                         }
                         
-                        const link = linkField ? linkField.values[0].value : 'Sin enlace web';
+                        // ✅ SOLUCIÓN MÁS ROBUSTA PARA EL ENLACE
+                        let link = 'Sin enlace web';
+                        if (linkField && linkField.values[0].value) {
+                            const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
+                            if (match && match[1]) {
+                                link = match[1];
+                            }
+                        }
 
-                        results += `*${index + 1}. ${title}*\n${valor}\n${localidad}\n${link}\n\n`;
+                        results += `*${index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
+
+                        // ✅ MEJORA DE ESPACIADO
+                        // Agregamos un separador, pero no en el último elemento
+                        if (index < properties.length - 1) {
+                            results += '\n\n----------\n\n';
+                        }
                     });
                     respuesta = results.trim();
                 } else {
@@ -617,6 +628,7 @@ app.post("/whatsapp", async (req, res) => {
 } else {
     // ... (El código de los asesores en el bloque ELSE se mantiene igual)
 }
+
 
 
   } catch (err) {
