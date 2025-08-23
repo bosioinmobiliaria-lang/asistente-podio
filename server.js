@@ -12,7 +12,7 @@ app.use(express.urlencoded({ extended: true }));
 // ----------------------------------------
 // Helpers
 // ----------------------------------------
-const FormData = require("form-data"); // (si ya lo tenés arriba, podés borrarlo de acá)
+
 
 function cleanDeep(obj) {
   if (obj === null || obj === undefined) return undefined;
@@ -206,16 +206,15 @@ async function appendToLeadSeguimiento(itemId, newLinePlain) {
   try {
     const token = await getAppAccessTokenFor("leads");
 
-    // Leer item para obtener field_id del campo 'seguimiento' y el valor actual
+    // Leer el item para obtener field_id + valor actual del campo
     const item = await getLeadDetails(itemId);
     const segField = item?.fields?.find(f => f.external_id === "seguimiento");
     if (!segField) return { ok: false, error: "Campo 'seguimiento' no encontrado" };
 
     const prev = segField.values?.[0]?.value || "";
-    const entry = formatSeguimientoEntry(newLinePlain);
+    const entry = formatSeguimientoEntry(newLinePlain); // => "[YYYY-MM-DD HH:MM:SS] texto"
     const merged = prev ? `${prev}\n${entry}` : entry;
 
-    // Actualizar SOLO ese field por field_id
     await axios.put(
       `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
       [{ type: "text", value: merged }],
@@ -228,6 +227,7 @@ async function appendToLeadSeguimiento(itemId, newLinePlain) {
     return { ok: false, error: err.response?.data || err.message };
   }
 }
+
 
 /** Busca lead por teléfono o por item_id */
 async function findLeadByPhoneOrId(inputStr) {
@@ -324,7 +324,7 @@ function formatLeadInfoSummary(leadItem) {
   const ubicacion = getTextFieldValue(leadItem, "ubicacion");
   const detalle = getTextFieldValue(leadItem, "detalle");
 
-  // Seguimiento (última línea → "DD/MM/AAAA: contenido")
+  // Última línea limpia del campo seguimiento → "DD/MM/AAAA: contenido"
   const segField = (leadItem.fields || []).find(f => f.external_id === "seguimiento");
   const seguimientoUltimo = segField?.values?.[0]?.value
     ? extractLastSeguimientoLine(segField.values[0].value)
