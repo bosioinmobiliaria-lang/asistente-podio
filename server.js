@@ -12,6 +12,8 @@ app.use(express.urlencoded({ extended: true }));
 // ----------------------------------------
 // Helpers
 // ----------------------------------------
+const FormData = require("form-data"); // (si ya lo tenés arriba, podés borrarlo de acá)
+
 function cleanDeep(obj) {
   if (obj === null || obj === undefined) return undefined;
   if (Array.isArray(obj)) {
@@ -47,69 +49,56 @@ function addHours(timeStr, hoursToAdd = 1) {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** Construye objeto de fecha para Podio (single o rango) */
 /** Construye objeto de fecha para Podio (solo fecha, sin hora) */
 function buildPodioDateObject(input) {
   if (!input) return undefined;
-
   let startDate;
 
   if (input instanceof Date) {
-    startDate = input.toISOString().substring(0, 10); // "AAAA-MM-DD"
+    startDate = input.toISOString().substring(0, 10);
   } else if (typeof input === "string") {
     const parts = splitDateTime(input);
-    if (parts) {
-      startDate = parts.date;
-    }
+    if (parts) startDate = parts.date;
   } else if (typeof input === "object" && input.start_date) {
     startDate = input.start_date;
   }
 
   if (!startDate) return undefined;
-
-  // Devuelve solo la fecha de inicio, sin hora.
-  return {
-    start_date: startDate,
-  };
+  return { start_date: startDate };
 }
 
-// --- NUEVO AYUDANTE PARA CALCULAR DÍAS DESDE UNA FECHA ---
+// --- AYUDANTE PARA CALCULAR DÍAS DESDE UNA FECHA ---
 function calculateDaysSince(dateString) {
-  if (!dateString) return 'N/A';
+  if (!dateString) return "N/A";
   try {
-    const activityDate = new Date(dateString.replace(" ", "T") + "Z"); // Aseguramos formato ISO
+    const activityDate = new Date(dateString.replace(" ", "T") + "Z");
     const today = new Date();
-    
-    // Diferencia en milisegundos
     const diffTime = Math.abs(today - activityDate);
-    // Convertir a días
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return 'hoy';
-    if (diffDays === 1) return 'hace 1 día';
+    if (diffDays === 0) return "hoy";
+    if (diffDays === 1) return "hace 1 día";
     return `hace ${diffDays} días`;
   } catch (e) {
     console.error("Error al calcular días:", e);
-    return 'N/A';
+    return "N/A";
   }
 }
 
-// --- NUEVO AYUDANTE PARA FORMATEAR FECHAS DE PODIO ---
+// --- FORMATEO FECHAS PODIO → DD/MM/AAAA ---
 function formatPodioDate(dateString) {
-  if (!dateString) return 'N/A';
+  if (!dateString) return "N/A";
   try {
-    // La fecha de Podio viene en formato "AAAA-MM-DD HH:MM:SS" (UTC)
     const date = new Date(dateString + " UTC");
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0'); // Se suma 1 porque los meses empiezan en 0
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
-  } catch (e) {
-    return 'N/A';
+  } catch {
+    return "N/A";
   }
 }
 
-// --- Fecha actual en "AAAA-MM-DD HH:MM:SS" (UTC-like simple) ---
+// --- Timestamp "AAAA-MM-DD HH:MM:SS" (hora local del server) ---
 function nowStamp() {
   const d = new Date();
   const y = d.getFullYear();
@@ -121,14 +110,13 @@ function nowStamp() {
   return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
 }
 
-// --- Construye una línea PLANA para guardar en "seguimiento" ---
+// --- Línea PLANA para guardar en "seguimiento": [fecha] contenido ---
 function formatSeguimientoEntry(plainText) {
-  const stamp = nowStamp();
-  // Guardar SIN HTML ni etiquetas, solo: [fecha] contenido
-  return `[${stamp}] ${plainText}`.trim();
+  const text = (plainText || "").toString().trim();
+  return `[${nowStamp()}] ${text}`;
 }
 
-// --- Utilidades para mostrar solo "fecha: contenido" (sin HTML/etiquetas) ---
+// --- Utilidades para mostrar solo "fecha: contenido" (sin HTML) ---
 function stripHtml(s) {
   return (s || "")
     .replace(/<[^>]*>/g, " ")
@@ -137,85 +125,68 @@ function stripHtml(s) {
     .replace(/\s+/g, " ")
     .trim();
 }
-
 function ddmmyyyyFromStamp(stamp) {
-  // stamp: "AAAA-MM-DD HH:MM:SS"
   const [d] = (stamp || "").split(" ");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d || "")) return stamp || "";
   const [Y, M, D] = d.split("-");
   return `${D}/${M}/${Y}`;
 }
-
-// Extrae el último bloque y devuelve "DD/MM/AAAA: contenido"
+// Devuelve "DD/MM/AAAA: contenido" del último bloque del campo seguimiento
 function extractLastSeguimientoLine(wholeText) {
   const clean = stripHtml(wholeText).replace(/\r/g, "");
   if (!clean) return "—";
-
-  // Si usás separador '---' entre cargas, nos quedamos con la última parte
-  const parts = clean.split(/\n?-{3,}\n?/);
+  const parts = clean.split(/\n?-{3,}\n?/); // por si quedó separador histórico
   const last = parts[parts.length - 1].trim();
-
-  // Buscar el estampado [AAAA-MM-DD HH:MM:SS]
   const m = last.match(/\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]/);
   const stamp = m ? m[1] : null;
-
-  // Quitar la cabecera y quedarnos con la PRIMERA línea "de contenido"
-  const afterStamp = stamp ? last.slice(last.indexOf("]") + 1).trim() : last;
-  const lines = afterStamp
+  let after = stamp ? last.slice(last.indexOf("]") + 1).trim() : last;
+  after = after
     .split("\n")
     .map(s => s.trim())
     .filter(Boolean)
-    // Filtramos etiquetas antiguas
     .filter(s => !/^Nueva conversación/i.test(s))
     .filter(s => !/^Resumen conversación/i.test(s))
     .filter(s => !/^\(Origen:/i.test(s))
-    .filter(s => !/^Para descargar/i.test(s));
-
-  const content = lines[0] || "—";
-  const fecha = stamp ? ddmmyyyyFromStamp(stamp) : "";
-
-  return fecha ? `${fecha}: ${content}` : content;
+    .filter(s => !/^Para descargar/i.test(s))[0] || "—";
+  return stamp ? `${ddmmyyyyFromStamp(stamp)}: ${after}` : after;
 }
 
-
+// --- Resultados de propiedades (WhatsApp) ---
 function formatResults(properties, startIndex, batchSize = 5) {
   const batch = properties.slice(startIndex, startIndex + batchSize);
-  let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
+  let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : "";
 
   batch.forEach((prop, index) => {
     const title = prop.title;
-    const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-    const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-    const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
+    const valorField = prop.fields.find(f => f.external_id === "valor-de-la-propiedad");
+    const localidadField = prop.fields.find(f => f.external_id === "localidad-texto-2");
+    const linkField = prop.fields.find(f => f.external_id === "enlace-texto-2");
 
-    const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
-    const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '') : 'No especificada';
+    const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString("es-AR")}*` : "Valor no especificado";
+    const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, "") : "No especificada";
     const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
-    let link = 'Sin enlace web';
+    let link = "Sin enlace web";
     if (linkField && linkField.values[0].value) {
       const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
       if (match && match[1]) link = match[1];
     }
 
     message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
-    if (index < batch.length - 1) message += '\n\n----------\n\n';
+    if (index < batch.length - 1) message += "\n\n----------\n\n";
   });
 
-  const hasMore = (startIndex + batchSize) < properties.length;
+  const hasMore = startIndex + batchSize < properties.length;
   return { message: message.trim(), hasMore };
 }
 
-function isTestNumber(waFrom) {
-  return waFrom === NUMERO_DE_PRUEBA;
-}
-
+// --- Utilidades Lead / Podio ---
 async function getLeadDetails(itemId) {
   const token = await getAppAccessTokenFor("leads");
   try {
     const { data } = await axios.get(`https://api.podio.com/item/${itemId}`, {
       headers: { Authorization: `OAuth2 ${token}` },
-      timeout: 20000
+      timeout: 20000,
     });
     return data;
   } catch (err) {
@@ -224,79 +195,64 @@ async function getLeadDetails(itemId) {
   }
 }
 
-/** Devuelve texto plano de un campo texto por external_id */
 function getTextFieldValue(item, externalId) {
   const f = (item?.fields || []).find(x => x.external_id === externalId);
   if (!f || !f.values || !f.values.length) return "";
-  // Podio text field: f.values[0].value (string)
   return (f.values[0].value || "").toString();
 }
 
-/** Obtiene 'seguimiento' actual y lo actualiza concatenando un nuevo bloque */
-async function appendToLeadSeguimiento(itemId, blockText) {
-  const token = await getAppAccessTokenFor("leads");
-
-  // 1) leer item p/ traer seguimiento previo
-  const item = await getLeadDetails(itemId);
-  let prev = getTextFieldValue(item, "seguimiento") || "";
-  const ts = new Date(); // timestamp local del server
-  const iso = ts.toISOString().replace("T", " ").slice(0, 19);
-  const newBlock = `\n\n---\n[${iso}] Nueva conversación\n${blockText}`.trim();
-
-  const merged = (prev ? (prev + "\n" + newBlock) : newBlock).trim();
-
-  // 2) intentar actualizar SOLO el campo seguimiento
+/** Guarda en 'seguimiento' SOLO "[fecha] contenido" (sin etiquetas extra) */
+async function appendToLeadSeguimiento(itemId, newLinePlain) {
   try {
+    const token = await getAppAccessTokenFor("leads");
+
+    // Leer item para obtener field_id del campo 'seguimiento' y el valor actual
+    const item = await getLeadDetails(itemId);
+    const segField = item?.fields?.find(f => f.external_id === "seguimiento");
+    if (!segField) return { ok: false, error: "Campo 'seguimiento' no encontrado" };
+
+    const prev = segField.values?.[0]?.value || "";
+    const entry = formatSeguimientoEntry(newLinePlain);
+    const merged = prev ? `${prev}\n${entry}` : entry;
+
+    // Actualizar SOLO ese field por field_id
     await axios.put(
-      `https://api.podio.com/item/${itemId}/value/seguimiento`,
-      [{ value: merged }],
+      `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
+      [{ type: "text", value: merged }],
       { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
     );
+
     return { ok: true };
   } catch (err) {
-    console.warn("PUT seguimiento falló, intento comentar:", err.response?.data || err.message);
-    // Fallback: agregar como comentario
-    try {
-      await axios.post(
-        `https://api.podio.com/comment/item/${itemId}/`,
-        { value: `# Conversación\n${blockText}` },
-        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
-      );
-      return { ok: true, commented: true };
-    } catch (err2) {
-      console.error("Fallback comentario falló:", err2.response?.data || err2.message);
-      return { ok: false, error: err2.response?.data || err2.message };
-    }
+    console.error("appendToLeadSeguimiento error:", err.response?.data || err.message);
+    return { ok: false, error: err.response?.data || err.message };
   }
 }
 
-/** Intenta buscar lead por teléfono (digits). Si no, si es un número grande, lo toma como item_id. */
+/** Busca lead por teléfono o por item_id */
 async function findLeadByPhoneOrId(inputStr) {
   const onlyDigits = (inputStr || "").replace(/\D/g, "");
   if (!onlyDigits) return { ok: false, reason: "empty" };
 
-  // Si parece un item_id grande (Podio usa IDs numéricos), probamos directo
-  if (onlyDigits.length >= 9 && onlyDigits.length <= 12) {
-    // Podría ser teléfono o item_id, preferimos teléfono primero:
+  // Intentar por teléfono primero
+  if (onlyDigits.length >= 9) {
     const found = await searchLeadByPhone(onlyDigits);
     if (found?.length) return { ok: true, leadItem: found[0] };
   }
-
-  // Si explícitamente quiere usar item_id, intentamos leerlo:
+  // Intentar como item_id
   if (onlyDigits.length >= 6) {
     const item = await getLeadDetails(Number(onlyDigits));
     if (item?.item_id) return { ok: true, leadItem: item };
   }
-
   return { ok: false, reason: "not_found" };
 }
 
-/** Resumen con OpenAI */
+// --- OpenAI resumen (fallback si no hay crédito) ---
 async function summarizeWithOpenAI(text) {
-  if (!process.env.OPENAI_API_KEY) {
-    // Sin API key, devolvemos texto “limpio”
-    return `• ${text.trim()}`;
-  }
+  const raw = (text || "").toString().trim();
+  if (!raw) return "";
+
+  if (!process.env.OPENAI_API_KEY) return raw; // sin key → guardar plano
   try {
     const { data } = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -304,27 +260,24 @@ async function summarizeWithOpenAI(text) {
         model: "gpt-4o-mini",
         temperature: 0.2,
         messages: [
-          { role: "system", content: "Eres un asistente que resume conversaciones de clientes inmobiliarios en viñetas claras y accionables. Incluye: Interés/Presupuesto, Zonas, Propiedades mencionadas, Próximos pasos. Tono profesional breve." },
-          { role: "user", content: `Transcribe y resume en bullets la siguiente conversación:\n\n${text}` }
+          { role: "system", content: "Resume en español la conversación del cliente inmobiliario en 1–3 oraciones claras y puntuales." },
+          { role: "user", content: raw }
         ]
       },
-      {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-      }
+      { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, timeout: 60000 }
     );
-    return (data.choices?.[0]?.message?.content || "").trim();
+    const out = (data.choices?.[0]?.message?.content || "").trim();
+    return out || raw;
   } catch (err) {
     console.error("OpenAI summarize error:", err.response?.data || err.message);
-    return `• ${text.trim()}`;
+    return raw; // fallback por cuota o error
   }
 }
 
-/** Transcribe audio WhatsApp (Twilio MediaUrl0) usando OpenAI Whisper */
+// --- Transcripción de audio WhatsApp (Twilio MediaUrl0) ---
 async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
   if (!mediaUrl) return { text: null, error: "no_media_url" };
-
   try {
-    // Descargar audio desde Twilio (requiere auth)
     const audioResp = await axios.get(mediaUrl, {
       responseType: "arraybuffer",
       auth: {
@@ -334,9 +287,7 @@ async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
       timeout: 60000,
     });
 
-    if (!process.env.OPENAI_API_KEY) {
-      return { text: null, error: "no_openai_key" };
-    }
+    if (!process.env.OPENAI_API_KEY) return { text: null, error: "no_openai_key" };
 
     const form = new FormData();
     form.append("file", Buffer.from(audioResp.data), { filename: "audio.ogg" });
@@ -346,10 +297,7 @@ async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
     const { data } = await axios.post(
       "https://api.openai.com/v1/audio/transcriptions",
       form,
-      {
-        headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-        timeout: 60000,
-      }
+      { headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, timeout: 60000 }
     );
 
     return { text: (data.text || "").trim(), error: null };
@@ -360,7 +308,7 @@ async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
   }
 }
 
-/** Mini resumen 4 bloques del Lead */
+/** Resumen compacto del Lead para WhatsApp (incluye último seguimiento limpio) */
 function formatLeadInfoSummary(leadItem) {
   if (!leadItem) return "No encontré info del lead.";
 
@@ -375,18 +323,12 @@ function formatLeadInfoSummary(leadItem) {
 
   const ubicacion = getTextFieldValue(leadItem, "ubicacion");
   const detalle = getTextFieldValue(leadItem, "detalle");
-  const seguimientoField = item.fields.find(f => f.external_id === "seguimiento");
-  let seguimientoUltimo = "—";
-  if (seguimientoField && seguimientoField.values && seguimientoField.values[0]?.value) {
-  // Podio suele devolver texto rico; nos traemos solo "fecha: contenido"
-  const fullText = seguimientoField.values[0].value;
-  seguimientoUltimo = extractLastSeguimientoLine(fullText);
-  }
 
-// Ahora, al armar el mensaje:
-const bloqueSeguimiento =
-  `🗂️ Seguimiento (último)\n` +
-  `${seguimientoUltimo}\n`; // <- solo "DD/MM/AAAA: contenido"
+  // Seguimiento (última línea → "DD/MM/AAAA: contenido")
+  const segField = (leadItem.fields || []).find(f => f.external_id === "seguimiento");
+  const seguimientoUltimo = segField?.values?.[0]?.value
+    ? extractLastSeguimientoLine(segField.values[0].value)
+    : "—";
 
   const fechaCarga = formatPodioDate(leadItem.created_on);
   const lastAct = calculateDaysSince(leadItem.last_event_on);
@@ -394,7 +336,7 @@ const bloqueSeguimiento =
   return [
     `👤 *Perfil*\n• Contacto: ${contacto}\n• Asesor: ${assignedTo}\n• Estado: ${estado}`,
     `🎯 *Interés*\n• Ubicación/zona: ${ubicacion || "—"}\n• Detalle: ${detalle || "—"}`,
-    `🗂️ *Seguimiento (últimos datos)*\n${(seguimiento || "—").split("\n").slice(-3).join("\n") || "—"}`,
+    `🗂️ *Seguimiento (último)*\n${seguimientoUltimo}`,
     `⏱️ *Actividad*\n• Cargado: ${fechaCarga}\n• Última actividad: ${lastAct}`
   ].join("\n\n");
 }
