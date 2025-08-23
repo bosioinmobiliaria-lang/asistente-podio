@@ -345,29 +345,77 @@ async function getItemDetails(itemId) {
 
 async function getAppAccessTokenFor(appName = "contactos") {
   const now = Date.now();
-  if (TOKENS[appName].value && now < TOKENS[appName].exp - 30_000) {
-    return TOKENS[appName].value;
+  const slot = TOKENS[appName] || (TOKENS[appName] = { value: null, exp: 0 });
+
+  if (slot.value && now < slot.exp - 30_000) {
+    return slot.value;
   }
-  const appId = appName === "leads" ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
-  const appToken = appName === "leads" ? process.env.PODIO_LEADS_APP_TOKEN : process.env.PODIO_CONTACTOS_APP_TOKEN;
+
+  // Mapeo correcto por app
+  const creds = (() => {
+    switch (appName) {
+      case "leads":
+        return {
+          appId: process.env.PODIO_LEADS_APP_ID,
+          appToken: process.env.PODIO_LEADS_APP_TOKEN,
+        };
+      case "propiedades":
+        return {
+          appId: process.env.PODIO_PROPIEDADES_APP_ID,
+          appToken: process.env.PODIO_PROPIEDADES_APP_TOKEN,
+        };
+      default:
+        return {
+          appId: process.env.PODIO_CONTACTOS_APP_ID,
+          appToken: process.env.PODIO_CONTACTOS_APP_TOKEN,
+        };
+    }
+  })();
+
+  if (!creds.appId || !creds.appToken) {
+    throw new Error(`[Podio] Faltan credenciales de app para "${appName}"`);
+  }
+
   const body = qs.stringify({
     grant_type: "app",
     client_id: process.env.PODIO_CLIENT_ID,
     client_secret: process.env.PODIO_CLIENT_SECRET,
-    app_id: appId,
-    app_token: appToken,
+    app_id: creds.appId,
+    app_token: creds.appToken,
   });
-  try {
-    const { data } = await axios.post("https://podio.com/oauth/token", body, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      timeout: 30000 // Aumenta el tiempo de espera a 30 segundos
-    });
-    TOKENS[appName].value = data.access_token;
-    TOKENS[appName].exp = Date.now() + (data.expires_in || 3600) * 1000;
-    return TOKENS[appName].value;
-  } catch (err) {
-    console.error("TOKEN ERROR:", err.response?.status, err.response?.data || err.message);
-    throw new Error("No se pudo obtener access_token de Podio");
+
+  // Retry exponencial simple (maneja 503/no_response/timeouts/transient)
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 600; // ms
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const { data } = await axios.post("https://podio.com/oauth/token", body, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        timeout: 45000, // +tiempo
+      });
+      slot.value = data.access_token;
+      slot.exp = Date.now() + (data.expires_in || 3600) * 1000;
+      return slot.value;
+    } catch (err) {
+      const status = err?.response?.status;
+      const code = err?.response?.data?.error || err?.code;
+      console.error("TOKEN ERROR:", status, err?.response?.data || err.message);
+
+      const retriable =
+        status === 503 ||
+        code === "no_response" ||
+        code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        err.message?.includes("timeout");
+
+      if (!retriable || attempt === MAX_RETRIES) {
+        throw new Error("No se pudo obtener access_token de Podio");
+      }
+
+      const delay = BASE_DELAY * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
 }
 
@@ -717,9 +765,9 @@ const TIPO_PROPIEDAD_MAP = {
 const ID_ESTADO_DISPONIBLE = 1; // ID de la opción "Disponible" del campo "Estado"
 // 
 
-// ✅ TU NÚMERO PARA ACTIVAR EL MODO DE PRUEBA
-const NUMERO_DE_PRUEBA = 'whatsapp:+5493546560311';
-
+// ==============================
+// WhatsApp Webhook (menú único)
+// ==============================
 app.post("/whatsapp", async (req, res) => {
   const twiml = new MessagingResponse();
   let respuesta = "";
@@ -729,694 +777,387 @@ app.post("/whatsapp", async (req, res) => {
     const numeroRemitente = req.body.From || "";
     let currentState = userStates[numeroRemitente];
 
-    // Espía de números
-    console.log(`--- COMPARANDO NÚMEROS ---`);
-    console.log(`Número Recibido: [${numeroRemitente}]`);
-    console.log(`Número de Prueba Esperado: [${NUMERO_DE_PRUEBA}]`);
-    console.log(`¿Coinciden?: ${numeroRemitente === NUMERO_DE_PRUEBA}`);
-    console.log(`--------------------------`);
+    // Menu general (para todos)
+    const menuGeneral =
+      "Hola 👋.\n\n" +
+      "*1.* ✅ Verificar Teléfono en Leads\n" +
+      "*2.* 🔎 Buscar una propiedad\n" +
+      "*3.* ✏️ Actualizar un LEADS\n\n" +
+      "Escribe *cancelar* para volver.";
 
-    // ===========================
-    //      MODO PRUEBA (Vos)
-    // ===========================
-    if (isTestNumber(numeroRemitente)) {
-      const menuDePrueba =
-        "Hola 👋.\n\n*1.* Verificar Teléfono en Leads\n*2.* 🔎 Buscar una propiedad\n*3.* ✏️ Actualizar un LEADS\n\nEscribe *cancelar* para volver.";
+    // Cancelar y volver al menú
+    if (["cancelar", "volver"].includes(mensajeRecibido.toLowerCase())) {
+      delete userStates[numeroRemitente];
+      respuesta = menuGeneral;
 
-      // Cancelar y volver al menú
-      if (["cancelar", "volver"].includes(mensajeRecibido.toLowerCase())) {
-        delete userStates[numeroRemitente];
-        respuesta = menuDePrueba;
-
-      } else if (currentState) {
-        // ------- Estados internos (TEST) -------
-        switch (currentState.step) {
-          // ===========================
-          // 1) Verificar teléfono en Leads
-          // ===========================
-          case "awaiting_phone_to_check": {
-            const phoneToCheck = mensajeRecibido.replace(/\D/g, "");
-            if (phoneToCheck.length < 9) {
-              respuesta = "El número parece muy corto. Enviá sin 0 y sin 15 (ej: 351... ó 3546...).";
-              break;
-            }
-
-            const existingLeads = await searchLeadByPhone(phoneToCheck);
-
-            if (existingLeads.length > 0) {
-              const lead = existingLeads[0];
-              const leadTitleField = lead.fields.find((f) => f.external_id === "contacto-2");
-              const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
-              const assignedField = lead.fields.find((f) => f.external_id === "vendedor-asignado-2");
-              const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
-              const creationDate = formatPodioDate(lead.created_on);
-              const lastActivityDays = calculateDaysSince(lead.last_event_on);
-
-              respuesta =
-                `✅ *Lead Encontrado*\n\n` +
-                `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
-              delete userStates[numeroRemitente];
-            } else {
-              currentState.step = "awaiting_creation_confirmation";
-              currentState.data = {
-                phone: [{ type: "mobile", value: phoneToCheck }],
-                "telefono-busqueda": phoneToCheck, // temporal p/ lead-text-search
-              };
-              respuesta =
-                `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n` +
-                `¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
-            }
+    } else if (currentState) {
+      // --------------------
+      // Flujo con estado
+      // --------------------
+      switch (currentState.step) {
+        // ===== 1) Verificar teléfono en Leads =====
+        case "awaiting_phone_to_check": {
+          const phoneToCheck = mensajeRecibido.replace(/\D/g, "");
+          if (phoneToCheck.length < 9) {
+            respuesta = "El número parece muy corto. Enviá sin 0 y sin 15 (ej: 351... ó 3546...).";
             break;
           }
 
-          case "awaiting_creation_confirmation": {
-            if (mensajeRecibido === "1") {
-              currentState.step = "awaiting_name_and_type";
-              respuesta =
-                "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
-                "*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
-            } else {
-              delete userStates[numeroRemitente];
-              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
-            }
-            break;
-          }
+          const existingLeads = await searchLeadByPhone(phoneToCheck);
 
-          case "awaiting_name_and_type": {
-            const info = mensajeRecibido.split("\n").map((line) => line.trim());
-            if (info.length < 2) {
-              respuesta = "❌ Faltan datos. Primera línea: Nombre. Segunda línea: Tipo (1 o 2).";
-              break;
-            }
-
-            const [nombre, tipoInputRaw] = info;
-            const tipoInput = (tipoInputRaw || "").trim();
-            const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
-
-            if (!nombre || !tipoId) {
-              let errorMsg = "❌ Hay un error en los datos.\n";
-              if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
-              if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
-              respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
-              break;
-            }
-
-            currentState.data.title = nombre;
-            currentState.data["tipo-de-contacto"] = [tipoId];
-
-            const telefono = currentState.data.phone[0].value;
-            const tipoTexto = tipoId === 1 ? "Comprador" : "Propietario";
+          if (existingLeads.length > 0) {
+            const lead = existingLeads[0];
+            const leadTitleField = lead.fields.find(f => f.external_id === "contacto-2");
+            const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
+            const assignedField = lead.fields.find(f => f.external_id === "vendedor-asignado-2");
+            const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
+            const creationDate = formatPodioDate(lead.created_on);
+            const lastActivityDays = calculateDaysSince(lead.last_event_on);
 
             respuesta =
-              `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n` +
-              "🌎 Elegí el *origen del contacto*:\n\n" +
-              "*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo";
-
-            currentState.step = "awaiting_origin";
-            break;
-          }
-
-          case "awaiting_origin": {
-            const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
-            if (!origenId) {
-              respuesta = "Opción no válida. Respondé con uno de los números de la lista.";
-              break;
-            }
-
-            currentState.data["contact-type"] = [origenId];
-
-            // Asignación automática de vendedor según el número que escribe
-            const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-            currentState.data["vendedor-asignado-2"] = [vendedorId];
-            currentState.data["fecha-de-creacion"] = buildPodioDateObject(new Date());
-
-            // Este campo no existe en la App de Contactos
-            delete currentState.data["telefono-busqueda"];
-
-            await createItemIn("contactos", currentState.data);
-
-            respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* creado y asignado correctamente.`;
+              `✅ *Lead Encontrado*\n\n` +
+              `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
             delete userStates[numeroRemitente];
-            break;
-          }
-
-          // ===========================
-          // 2) Buscar propiedad
-          // ===========================
-          case "awaiting_property_type": {
-            const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
-            if (!tipoId) {
-              respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
-              break;
-            }
-            currentState.filters.tipo = tipoId;
-            currentState.step = "awaiting_filter_choice";
+          } else {
+            currentState.step = "awaiting_creation_confirmation";
+            currentState.data = {
+              phone: [{ type: "mobile", value: phoneToCheck }],
+              "telefono-busqueda": phoneToCheck,
+            };
             respuesta =
-              "Perfecto. ¿Cómo querés filtrar?\n\n" +
-              "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
+              `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n` +
+              `¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
+          }
+          break;
+        }
+
+        case "awaiting_creation_confirmation": {
+          if (mensajeRecibido === "1") {
+            currentState.step = "awaiting_name_and_type";
+            respuesta =
+              "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
+              "*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
+          } else {
+            delete userStates[numeroRemitente];
+            respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
+          }
+          break;
+        }
+
+        case "awaiting_name_and_type": {
+          const info = mensajeRecibido.split("\n").map(line => line.trim());
+          if (info.length < 2) {
+            respuesta = "❌ Faltan datos. Primera línea: Nombre. Segunda línea: Tipo (1 o 2).";
             break;
           }
 
-          case "awaiting_filter_choice": {
-            const filterChoice = mensajeRecibido;
-            if (filterChoice === "1") {
-              currentState.step = "awaiting_final_filter";
-              currentState.finalFilterType = "localidad";
+          const [nombre, tipoInputRaw] = info;
+          const tipoInput = (tipoInputRaw || "").trim();
+          const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
+
+          if (!nombre || !tipoId) {
+            let errorMsg = "❌ Hay un error en los datos.\n";
+            if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
+            if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
+            respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
+            break;
+          }
+
+          currentState.data.title = nombre;
+          currentState.data["tipo-de-contacto"] = [tipoId];
+
+          const telefono = currentState.data.phone[0].value;
+          const tipoTexto = tipoId === 1 ? "Comprador" : "Propietario";
+
+          respuesta =
+            `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n` +
+            "🌎 Elegí el *origen del contacto*:\n\n" +
+            "*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo";
+          currentState.step = "awaiting_origin";
+          break;
+        }
+
+        case "awaiting_origin": {
+          const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
+          if (!origenId) {
+            respuesta = "Opción no válida. Respondé con uno de los números de la lista.";
+            break;
+          }
+
+          currentState.data["contact-type"] = [origenId];
+          const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+          currentState.data["vendedor-asignado-2"] = [vendedorId];
+          currentState.data["fecha-de-creacion"] = buildPodioDateObject(new Date());
+          delete currentState.data["telefono-busqueda"];
+
+          await createItemIn("contactos", currentState.data);
+
+          respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* creado y asignado correctamente.`;
+          delete userStates[numeroRemitente];
+          break;
+        }
+
+        // ===== 2) Buscar propiedad =====
+        case "awaiting_property_type": {
+          const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
+          if (!tipoId) {
+            respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
+            break;
+          }
+          currentState.filters.tipo = tipoId;
+          currentState.step = "awaiting_filter_choice";
+          respuesta =
+            "Perfecto. ¿Cómo querés filtrar?\n\n" +
+            "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
+          break;
+        }
+
+        case "awaiting_filter_choice": {
+          const filterChoice = mensajeRecibido;
+          if (filterChoice === "1") {
+            currentState.step = "awaiting_final_filter";
+            currentState.finalFilterType = "localidad";
+            respuesta =
+              "📍 Muy bien, elegí la localidad:\n\n" +
+              "*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio";
+          } else if (filterChoice === "2") {
+            currentState.step = "awaiting_final_filter";
+            currentState.finalFilterType = "precio";
+            respuesta =
+              "💰 Entendido, elegí un rango de precios (en USD):\n\n" +
+              "*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n" +
+              "*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k";
+          } else {
+            respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
+          }
+          break;
+        }
+
+        case "awaiting_final_filter": {
+          if (currentState.finalFilterType === "localidad") {
+            const localidadId = LOCALIDAD_MAP[mensajeRecibido];
+            if (!localidadId) { respuesta = "Opción no válida..."; break; }
+            currentState.filters.localidad = localidadId;
+          } else {
+            const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
+            if (!precioRango) { respuesta = "Opción no válida..."; break; }
+            currentState.filters.precio = precioRango;
+          }
+
+          respuesta = "🔎 Buscando propiedades...";
+          const properties = await searchProperties(currentState.filters);
+
+          if (properties.length > 0) {
+            currentState.searchResults = properties;
+            currentState.searchIndex = 0;
+
+            const { message, hasMore } = formatResults(currentState.searchResults, currentState.searchIndex);
+            respuesta = message;
+
+            if (hasMore) {
+              respuesta +=
+                "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
+                "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
+                "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
+              currentState.step = "awaiting_more_results";
+            } else {
+              delete userStates[numeroRemitente];
+            }
+          } else {
+            respuesta = "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔";
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
+
+        case "awaiting_more_results": {
+          const moreChoice = mensajeRecibido;
+          if (moreChoice === "1") {
+            currentState.searchIndex += 5;
+            const { message, hasMore } = formatResults(currentState.searchResults, currentState.searchIndex);
+            respuesta = message;
+
+            if (hasMore) {
+              respuesta +=
+                "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
+                "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
+                "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
+            } else {
+              respuesta += "\n\nNo hay más propiedades para mostrar.";
+              delete userStates[numeroRemitente];
+            }
+          } else if (moreChoice === "2") {
+            respuesta = "Ok, búsqueda finalizada. ¡Éxitos! 👍";
+            delete userStates[numeroRemitente];
+          } else if (moreChoice === "3") {
+            delete currentState.filters[currentState.finalFilterType];
+            currentState.step = "awaiting_final_filter";
+            if (currentState.finalFilterType === "localidad") {
               respuesta =
-                "📍 Muy bien, elegí la localidad:\n\n" +
+                "📍 Muy bien, elegí la nueva localidad:\n\n" +
                 "*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio";
-            } else if (filterChoice === "2") {
-              currentState.step = "awaiting_final_filter";
-              currentState.finalFilterType = "precio";
+            } else {
               respuesta =
-                "💰 Entendido, elegí un rango de precios (en USD):\n\n" +
+                "💰 Entendido, elegí el nuevo rango de precios (en USD):\n\n" +
                 "*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n" +
                 "*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k";
-            } else {
-              respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
             }
-            break;
-          }
-
-          case "awaiting_final_filter": {
-            if (currentState.finalFilterType === "localidad") {
-              const localidadId = LOCALIDAD_MAP[mensajeRecibido];
-              if (!localidadId) {
-                respuesta = "Opción no válida...";
-                break;
-              }
-              currentState.filters.localidad = localidadId;
-            } else {
-              const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
-              if (!precioRango) {
-                respuesta = "Opción no válida...";
-                break;
-              }
-              currentState.filters.precio = precioRango;
-            }
-
-            respuesta = "🔎 Buscando propiedades...";
-            const properties = await searchProperties(currentState.filters);
-
-            if (properties.length > 0) {
-              currentState.searchResults = properties;
-              currentState.searchIndex = 0;
-
-              const { message, hasMore } = formatResults(
-                currentState.searchResults,
-                currentState.searchIndex
-              );
-              respuesta = message;
-
-              if (hasMore) {
-                respuesta +=
-                  "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
-                  "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
-                  "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
-                currentState.step = "awaiting_more_results";
-              } else {
-                delete userStates[numeroRemitente];
-              }
-            } else {
-              respuesta =
-                "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔";
-              delete userStates[numeroRemitente];
-            }
-            break;
-          }
-
-          case "awaiting_more_results": {
-            const moreChoice = mensajeRecibido;
-            if (moreChoice === "1") {
-              currentState.searchIndex += 5;
-              const { message, hasMore } = formatResults(
-                currentState.searchResults,
-                currentState.searchIndex
-              );
-              respuesta = message;
-
-              if (hasMore) {
-                respuesta +=
-                  "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
-                  "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
-                  "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
-              } else {
-                respuesta += "\n\nNo hay más propiedades para mostrar.";
-                delete userStates[numeroRemitente];
-              }
-            } else if (moreChoice === "2") {
-              respuesta = "Ok, búsqueda finalizada. ¡Éxitos! 👍";
-              delete userStates[numeroRemitente];
-            } else if (moreChoice === "3") {
-              delete currentState.filters[currentState.finalFilterType];
-              currentState.step = "awaiting_final_filter";
-              if (currentState.finalFilterType === "localidad") {
-                respuesta =
-                  "📍 Muy bien, elegí la nueva localidad:\n\n" +
-                  "*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio";
-              } else {
-                respuesta =
-                  "💰 Entendido, elegí el nuevo rango de precios (en USD):\n\n" +
-                  "*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n" +
-                  "*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k";
-              }
-            } else if (moreChoice === "4") {
-              delete currentState.filters.precio;
-              delete currentState.filters.localidad;
-              currentState.step = "awaiting_filter_choice";
-              respuesta =
-                "Perfecto. ¿Cómo querés filtrar ahora?\n\n" +
-                "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
-            } else if (moreChoice === "5") {
-              delete userStates[numeroRemitente];
-              respuesta = menuDePrueba;
-            } else {
-              respuesta = "Opción no válida. Por favor, elegí un número del 1 al 5.";
-            }
-            break;
-          }
-
-          // ===========================
-          // 3) ACTUALIZAR LEAD (solo TEST)
-          // ===========================
-          case "update_lead_start": {
-            // Usuario envía teléfono o item_id
-            const key = mensajeRecibido.trim();
-            const found = await findLeadByPhoneOrId(key);
-
-            if (!found.ok) {
-              respuesta = "❌ No encontré el Lead. Probá con *otro teléfono* (sin 0/15) o *ID*.";
-              break;
-            }
-
-            // Normalizamos a item completo
-            const leadItem = found.leadItem.item_id
-              ? found.leadItem
-              : await getLeadDetails(found.leadItem.item_id || found.leadItem);
-
-            if (!leadItem?.item_id) {
-              respuesta = "❌ No pude abrir el Lead. Probá de nuevo.";
-              break;
-            }
-
-            currentState.step = "update_lead_choice";
-            currentState.leadItemId = leadItem.item_id;
-            currentState.leadCache = leadItem; // cache
-
+          } else if (moreChoice === "4") {
+            delete currentState.filters.precio;
+            delete currentState.filters.localidad;
+            currentState.step = "awaiting_filter_choice";
             respuesta =
-              `✅ LEAD seleccionado (#${leadItem.item_id}). ¿Qué querés hacer?\n\n` +
-              "*a.* 📄 Info del Lead (resumen)\n*b.* 🗣️ Nueva conversación (texto o audio)\n*c.* 📅 Agendar visita (próximamente)\n\n" +
-              "Escribí *a*, *b* o *c*.";
+              "Perfecto. ¿Cómo querés filtrar ahora?\n\n" +
+              "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
+          } else if (moreChoice === "5") {
+            delete userStates[numeroRemitente];
+            respuesta = menuGeneral;
+          } else {
+            respuesta = "Opción no válida. Por favor, elegí un número del 1 al 5.";
+          }
+          break;
+        }
+
+        // ===== 3) Actualizar LEAD =====
+        case "update_lead_start": {
+          const key = mensajeRecibido.trim();
+          const found = await findLeadByPhoneOrId(key);
+
+          if (!found.ok) {
+            respuesta = "❌ No encontré el Lead. Probá con *otro teléfono* (sin 0/15) o *ID*.";
             break;
           }
 
-          case "update_lead_choice": {
-            const opt = mensajeRecibido.toLowerCase();
+          const leadItem = found.leadItem.item_id
+            ? found.leadItem
+            : await getLeadDetails(found.leadItem.item_id || found.leadItem);
 
-            if (opt === "a") {
-              const item = currentState.leadCache || (await getLeadDetails(currentState.leadItemId));
-              respuesta = formatLeadInfoSummary(item) + `\n\n¿Querés hacer otra acción? (*a*/*b* o *cancelar*)`;
-              break;
-            }
-
-            if (opt === "b") {
-              currentState.step = "awaiting_update_lead_content";
-              respuesta =
-                "🗣️ Enviame *el texto* de la conversación o *un audio de WhatsApp*.\n" +
-                "Lo resumimos y lo guardamos en *seguimiento* del Lead.";
-              break;
-            }
-
-            if (opt === "c") {
-              respuesta = "🛠️ *Agendar visita* lo activamos más adelante. Por ahora usá *a* o *b*.";
-              break;
-            }
-
-            respuesta = "Opción no válida. Escribí *a*, *b* o *c* (o *cancelar*).";
+          if (!leadItem?.item_id) {
+            respuesta = "❌ No pude abrir el Lead. Probá de nuevo.";
             break;
           }
 
-          case "awaiting_update_lead_content": {
-              const itemId = currentState.leadItemId;
+          currentState.step = "update_lead_choice";
+          currentState.leadItemId = leadItem.item_id;
+          currentState.leadCache = leadItem;
 
-              const numMedia = parseInt(req.body.NumMedia || "0", 10);
-              const mediaType0 = (req.body.MediaContentType0 || "").toLowerCase().split(";")[0]; // ej: audio/ogg;codecs=opus
-              const mediaUrl0 = req.body.MediaUrl0 || "";
+          respuesta =
+            `✅ LEAD seleccionado (#${leadItem.item_id}). ¿Qué querés hacer?\n\n` +
+            "*a.* 📄 Info del Lead (resumen)\n*b.* 🗣️ Nueva conversación (texto o audio)\n*c.* 📅 Agendar visita (próximamente)\n\n" +
+            "Escribí *a*, *b* o *c*.";
+          break;
+        }
 
-              let transcriptRes = null;
-              let origin = "texto";
-              let rawText = (req.body.Body || "").trim();
+        case "update_lead_choice": {
+          const opt = mensajeRecibido.toLowerCase();
 
-              // ¿Vino audio?
-              if (numMedia > 0 && mediaType0.startsWith("audio/")) {
-              transcriptRes = await transcribeAudioFromTwilioMediaUrl(mediaUrl0);
-              origin = transcriptRes?.text ? "audio" : "audio (no transcrito)";
-              }
+          if (opt === "a") {
+            const item = currentState.leadCache || (await getLeadDetails(currentState.leadItemId));
+            respuesta = formatLeadInfoSummary(item) + `\n\n¿Querés hacer otra acción? (*a*/*b* o *cancelar*)`;
+            break;
+          }
 
-              const baseText = (transcriptRes && transcriptRes.text) ? transcriptRes.text : rawText;
+          if (opt === "b") {
+            currentState.step = "awaiting_update_lead_content";
+            respuesta =
+              "🗣️ Enviame *el texto* de la conversación o *un audio de WhatsApp*.\n" +
+              "Lo resumimos y lo guardamos en *seguimiento* del Lead.";
+            break;
+          }
 
-              if (!baseText) {
-              // Sin texto y sin transcripción ⇒ igual registramos el audio con link
-              const appended = await appendToLeadSeguimiento(
+          if (opt === "c") {
+            respuesta = "🛠️ *Agendar visita* lo activamos más adelante. Por ahora usá *a* o *b*.";
+            break;
+          }
+
+          respuesta = "Opción no válida. Escribí *a*, *b* o *c* (o *cancelar*).";
+          break;
+        }
+
+        case "awaiting_update_lead_content": {
+          const itemId = currentState.leadItemId;
+
+          const numMedia = parseInt(req.body.NumMedia || "0", 10);
+          const mediaType0 = (req.body.MediaContentType0 || "").toLowerCase().split(";")[0]; // ej: audio/ogg;codecs=opus
+          const mediaUrl0 = req.body.MediaUrl0 || "";
+
+          let transcriptRes = null;
+          let origin = "texto";
+          let rawText = (req.body.Body || "").trim();
+
+          // ¿Vino audio?
+          if (numMedia > 0 && mediaType0.startsWith("audio/")) {
+            transcriptRes = await transcribeAudioFromTwilioMediaUrl(mediaUrl0);
+            origin = transcriptRes?.text ? "audio" : "audio (no transcrito)";
+          }
+
+          const baseText = (transcriptRes && transcriptRes.text) ? transcriptRes.text : rawText;
+
+          if (!baseText) {
+            // Sin texto y sin transcripción ⇒ igual registramos el audio con link
+            const appended = await appendToLeadSeguimiento(
               itemId,
               `**Audio recibido** (no transcrito)\nEnlace: ${mediaUrl0}\n` +
               `(Para descargar, usar credenciales de Twilio; ver logs si no abre)`
-              );
+            );
 
-              if (appended.ok) {
+            if (appended.ok) {
               respuesta = "✅ Audio guardado en *seguimiento* (sin transcripción por límite de cuota). ¿Algo más? (*a*/*b* o *cancelar*)";
               currentState.step = "update_lead_choice";
-              } else {
+            } else {
               respuesta = "❌ No pude guardar el audio. Avisá al admin.";
               delete userStates[numeroRemitente];
-              }
-              break;
-              }     
-
-              // Tenemos texto (ya sea de nota de voz transcrita o escrito)
-              const summary = await summarizeWithOpenAI(baseText);
-              const extraLink = (transcriptRes && !transcriptRes.text && mediaUrl0) ? `\n\n[Audio WhatsApp] ${mediaUrl0}` : "";
-
-              const appended = await appendToLeadSeguimiento(
-              itemId,
-              `**Resumen conversación**\n${summary}${extraLink}\n\n(Origen: ${origin})`
-              );
-
-              if (appended.ok) {
-              respuesta = "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
-              currentState.step = "update_lead_choice";
-              } else {
-              respuesta = "❌ No pude guardar el seguimiento. Avisá al admin.";
-              delete userStates[numeroRemitente];
-              }
-              break;
-          }
-
-          // ------- Fallback -------
-          default: {
-            delete userStates[numeroRemitente];
-            respuesta = menuDePrueba;
+            }
             break;
           }
-        } // end switch
 
-      } else {
-        // ------- Sin estado: menú inicial (TEST) -------
-        if (mensajeRecibido === "1") {
-          userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
-          respuesta =
-            "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...).";
-        } else if (mensajeRecibido === "2") {
-          userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
-          respuesta =
-            "🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n" +
-            "*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\n" +
-            "Escribe *volver* para ir al menú anterior.";
-        } else if (mensajeRecibido === "3") {
-          userStates[numeroRemitente] = { step: "update_lead_start" };
-          respuesta =
-            "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar.";
-        } else {
-          respuesta = menuDePrueba;
+          // Tenemos texto (nota de voz transcrita o texto escrito)
+          const summary = await summarizeWithOpenAI(baseText);
+          const extraLink = (transcriptRes && !transcriptRes.text && mediaUrl0) ? `\n\n[Audio WhatsApp] ${mediaUrl0}` : "";
+
+          const appended = await appendToLeadSeguimiento(
+            itemId,
+            `**Resumen conversación**\n${summary}${extraLink}\n\n(Origen: ${origin})`
+          );
+
+          if (appended.ok) {
+            respuesta = "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
+            currentState.step = "update_lead_choice";
+          } else {
+            respuesta = "❌ No pude guardar el seguimiento. Avisá al admin.";
+            delete userStates[numeroRemitente];
+          }
+          break;
         }
-      }
 
-    // ===========================
-    //    MODO ASESORES (normal)
-    // ===========================
+        // ------- fallback -------
+        default: {
+          delete userStates[numeroRemitente];
+          respuesta = menuGeneral;
+          break;
+        }
+      } // end switch con estado
+
     } else {
-      const menuAsesores =
-        "Hola 👋.\n\n*1.* Verificar Teléfono en Leads\n*2.* 🔎 Buscar una propiedad\n\nEscribe *cancelar* para volver.";
-
-      if (["cancelar", "volver"].includes(mensajeRecibido.toLowerCase())) {
-        delete userStates[numeroRemitente];
-        respuesta = menuAsesores;
-
-      } else if (currentState) {
-        switch (currentState.step) {
-          // 1) Verificar teléfono (igual que en TEST)
-          case "awaiting_phone_to_check": {
-            const phoneToCheck = mensajeRecibido.replace(/\D/g, "");
-            if (phoneToCheck.length < 9) {
-              respuesta = "El número parece muy corto. Enviá sin 0 y sin 15 (ej: 351... ó 3546...).";
-              break;
-            }
-
-            const existingLeads = await searchLeadByPhone(phoneToCheck);
-
-            if (existingLeads.length > 0) {
-              const lead = existingLeads[0];
-              const leadTitleField = lead.fields.find((f) => f.external_id === "contacto-2");
-              const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
-              const assignedField = lead.fields.find((f) => f.external_id === "vendedor-asignado-2");
-              const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
-              const creationDate = formatPodioDate(lead.created_on);
-              const lastActivityDays = calculateDaysSince(lead.last_event_on);
-
-              respuesta =
-                `✅ *Lead Encontrado*\n\n` +
-                `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
-              delete userStates[numeroRemitente];
-            } else {
-              currentState.step = "awaiting_creation_confirmation";
-              currentState.data = {
-                phone: [{ type: "mobile", value: phoneToCheck }],
-                "telefono-busqueda": phoneToCheck,
-              };
-              respuesta =
-                `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n` +
-                `¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
-            }
-            break;
-          }
-
-          case "awaiting_creation_confirmation": {
-            if (mensajeRecibido === "1") {
-              currentState.step = "awaiting_name_and_type";
-              respuesta =
-                "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
-                "*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
-            } else {
-              delete userStates[numeroRemitente];
-              respuesta = "Ok, operación cancelada. Volviendo al menú principal.";
-            }
-            break;
-          }
-
-          case "awaiting_name_and_type": {
-            const info = mensajeRecibido.split("\n").map((line) => line.trim());
-            if (info.length < 2) {
-              respuesta = "❌ Faltan datos. Primera línea: Nombre. Segunda línea: Tipo (1 o 2).";
-              break;
-            }
-            const [nombre, tipoInputRaw] = info;
-            const tipoInput = (tipoInputRaw || "").trim();
-            const tipoId = TIPO_CONTACTO_MAP[tipoInput.charAt(0)];
-
-            if (!nombre || !tipoId) {
-              let errorMsg = "❌ Hay un error en los datos.\n";
-              if (!nombre) errorMsg += "El *Nombre* no puede estar vacío.\n";
-              if (!tipoId) errorMsg += "El *Tipo* debe ser 1 o 2.\n";
-              respuesta = errorMsg + "\nPor favor, intentá de nuevo.";
-              break;
-            }
-
-            currentState.data.title = nombre;
-            currentState.data["tipo-de-contacto"] = [tipoId];
-
-            const telefono = currentState.data.phone[0].value;
-            const tipoTexto = tipoId === 1 ? "Comprador" : "Propietario";
-
-            respuesta =
-              `✅ *Datos recibidos:*\n\n*Nombre:* ${nombre}\n*Teléfono:* ${telefono}\n*Tipo:* ${tipoTexto}\n\n` +
-              "🌎 Elegí el *origen del contacto*:\n\n" +
-              "*1.* Inmobiliaria\n*2.* Facebook\n*3.* Cartelería\n*4.* Página Web\n*5.* Showroom\n*6.* 0810\n*7.* Referido\n*8.* Instagram (Personal)\n*9.* Instagram (Inmobiliaria)\n*10.* Publicador externo\n*11.* Cliente antiguo";
-
-            currentState.step = "awaiting_origin";
-            break;
-          }
-
-          case "awaiting_origin": {
-            const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
-            if (!origenId) {
-              respuesta = "Opción no válida. Respondé con uno de los números de la lista.";
-              break;
-            }
-
-            currentState.data["contact-type"] = [origenId];
-
-            const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-            currentState.data["vendedor-asignado-2"] = [vendedorId];
-            currentState.data["fecha-de-creacion"] = buildPodioDateObject(new Date());
-
-            delete currentState.data["telefono-busqueda"];
-
-            await createItemIn("contactos", currentState.data);
-
-            respuesta = `✅ ¡Genial! Contacto *"${currentState.data.title}"* creado y asignado correctamente.`;
-            delete userStates[numeroRemitente];
-            break;
-          }
-
-          // 2) Buscar propiedad (igual que en TEST)
-          case "awaiting_property_type": {
-            const tipoId = TIPO_PROPIEDAD_MAP[mensajeRecibido];
-            if (!tipoId) {
-              respuesta = "Opción no válida. Por favor, elegí un número de la lista o escribí 'volver'.";
-              break;
-            }
-            currentState.filters.tipo = tipoId;
-            currentState.step = "awaiting_filter_choice";
-            respuesta =
-              "Perfecto. ¿Cómo querés filtrar?\n\n" +
-              "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
-            break;
-          }
-
-          case "awaiting_filter_choice": {
-            const filterChoice = mensajeRecibido;
-            if (filterChoice === "1") {
-              currentState.step = "awaiting_final_filter";
-              currentState.finalFilterType = "localidad";
-              respuesta =
-                "📍 Muy bien, elegí la localidad:\n\n" +
-                "*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio";
-            } else if (filterChoice === "2") {
-              currentState.step = "awaiting_final_filter";
-              currentState.finalFilterType = "precio";
-              respuesta =
-                "💰 Entendido, elegí un rango de precios (en USD):\n\n" +
-                "*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n" +
-                "*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k";
-            } else {
-              respuesta = "Opción no válida. Por favor, elegí 1 o 2.";
-            }
-            break;
-          }
-
-          case "awaiting_final_filter": {
-            if (currentState.finalFilterType === "localidad") {
-              const localidadId = LOCALIDAD_MAP[mensajeRecibido];
-              if (!localidadId) {
-                respuesta = "Opción no válida...";
-                break;
-              }
-              currentState.filters.localidad = localidadId;
-            } else {
-              const precioRango = PRECIO_RANGOS_MAP[mensajeRecibido];
-              if (!precioRango) {
-                respuesta = "Opción no válida...";
-                break;
-              }
-              currentState.filters.precio = precioRango;
-            }
-
-            respuesta = "🔎 Buscando propiedades...";
-            const properties = await searchProperties(currentState.filters);
-
-            if (properties.length > 0) {
-              currentState.searchResults = properties;
-              currentState.searchIndex = 0;
-
-              const { message, hasMore } = formatResults(
-                currentState.searchResults,
-                currentState.searchIndex
-              );
-              respuesta = message;
-
-              if (hasMore) {
-                respuesta +=
-                  "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
-                  "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
-                  "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
-                currentState.step = "awaiting_more_results";
-              } else {
-                delete userStates[numeroRemitente];
-              }
-            } else {
-              respuesta =
-                "Lo siento, no encontré propiedades disponibles que coincidan con tu búsqueda. 😔";
-              delete userStates[numeroRemitente];
-            }
-            break;
-          }
-
-          case "awaiting_more_results": {
-            const moreChoice = mensajeRecibido;
-            if (moreChoice === "1") {
-              currentState.searchIndex += 5;
-              const { message, hasMore } = formatResults(
-                currentState.searchResults,
-                currentState.searchIndex
-              );
-              respuesta = message;
-
-              if (hasMore) {
-                respuesta +=
-                  "\n\n🤔 ¿Qué querés hacer ahora?\n\n" +
-                  "*1.* 👉 Ver siguientes\n*2.* 🏁 Finalizar búsqueda\n*3.* 💵 Nueva búsqueda (otro valor)\n" +
-                  "*4.* 🗺️ Nueva búsqueda (otro filtro)\n*5.* 🏠 Volver al menú principal";
-              } else {
-                respuesta += "\n\nNo hay más propiedades para mostrar.";
-                delete userStates[numeroRemitente];
-              }
-            } else if (moreChoice === "2") {
-              respuesta = "Ok, búsqueda finalizada. ¡Éxitos! 👍";
-              delete userStates[numeroRemitente];
-            } else if (moreChoice === "3") {
-              delete currentState.filters[currentState.finalFilterType];
-              currentState.step = "awaiting_final_filter";
-              if (currentState.finalFilterType === "localidad") {
-                respuesta =
-                  "📍 Muy bien, elegí la nueva localidad:\n\n" +
-                  "*1.* Villa del Dique\n*2.* Villa Rumipal\n*3.* Santa Rosa\n*4.* Amboy\n*5.* San Ignacio";
-              } else {
-                respuesta =
-                  "💰 Entendido, elegí el nuevo rango de precios (en USD):\n\n" +
-                  "*1.* 0 - 10k\n*2.* 10k - 20k\n*3.* 20k - 40k\n*4.* 40k - 60k\n*5.* 60k - 80k\n*6.* 80k - 100k\n" +
-                  "*7.* 100k - 130k\n*8.* 130k - 160k\n*9.* 160k - 200k\n*10.* 200k - 300k\n*11.* 300k - 500k\n*12.* +500k";
-              }
-            } else if (moreChoice === "4") {
-              delete currentState.filters.precio;
-              delete currentState.filters.localidad;
-              currentState.step = "awaiting_filter_choice";
-              respuesta =
-                "Perfecto. ¿Cómo querés filtrar ahora?\n\n" +
-                "*1.* 📍 Por Localidad\n*2.* 💰 Por Precio\n*3.* ↩️ Volver al menú anterior";
-            } else if (moreChoice === "5") {
-              delete userStates[numeroRemitente];
-              respuesta = menuAsesores;
-            } else {
-              respuesta = "Opción no válida. Por favor, elegí un número del 1 al 5.";
-            }
-            break;
-          }
-
-          default: {
-            delete userStates[numeroRemitente];
-            respuesta = menuAsesores;
-            break;
-          }
-        } // end switch (asesores)
-
+      // --------------------
+      // Sin estado: menú inicial
+      // --------------------
+      if (mensajeRecibido === "1") {
+        userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
+        respuesta = "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...).";
+      } else if (mensajeRecibido === "2") {
+        userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
+        respuesta =
+          "🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n" +
+          "*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\n" +
+          "Escribe *volver* para ir al menú anterior.";
+      } else if (mensajeRecibido === "3") {
+        userStates[numeroRemitente] = { step: "update_lead_start" };
+        respuesta = "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar.";
       } else {
-        // ------- Sin estado: menú inicial (ASESORES) -------
-        if (mensajeRecibido === "1") {
-          userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
-          respuesta =
-            "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...).";
-        } else if (mensajeRecibido === "2") {
-          userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
-          respuesta =
-            "🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n" +
-            "*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\n" +
-            "Escribe *volver* para ir al menú anterior.";
-        } else {
-          respuesta = menuAsesores;
-        }
+        respuesta = menuGeneral;
       }
     }
-
   } catch (err) {
     console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
     if (err.response) {
