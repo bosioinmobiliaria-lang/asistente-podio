@@ -109,6 +109,75 @@ function formatPodioDate(dateString) {
   }
 }
 
+// --- Fecha actual en "AAAA-MM-DD HH:MM:SS" (UTC-like simple) ---
+function nowStamp() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+}
+
+// --- Construye una línea PLANA para guardar en "seguimiento" ---
+function formatSeguimientoEntry(plainText) {
+  const stamp = nowStamp();
+  // Guardar SIN HTML ni etiquetas, solo: [fecha] contenido
+  return `[${stamp}] ${plainText}`.trim();
+}
+
+// --- Utilidades para mostrar solo "fecha: contenido" (sin HTML/etiquetas) ---
+function stripHtml(s) {
+  return (s || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ddmmyyyyFromStamp(stamp) {
+  // stamp: "AAAA-MM-DD HH:MM:SS"
+  const [d] = (stamp || "").split(" ");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d || "")) return stamp || "";
+  const [Y, M, D] = d.split("-");
+  return `${D}/${M}/${Y}`;
+}
+
+// Extrae el último bloque y devuelve "DD/MM/AAAA: contenido"
+function extractLastSeguimientoLine(wholeText) {
+  const clean = stripHtml(wholeText).replace(/\r/g, "");
+  if (!clean) return "—";
+
+  // Si usás separador '---' entre cargas, nos quedamos con la última parte
+  const parts = clean.split(/\n?-{3,}\n?/);
+  const last = parts[parts.length - 1].trim();
+
+  // Buscar el estampado [AAAA-MM-DD HH:MM:SS]
+  const m = last.match(/\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]/);
+  const stamp = m ? m[1] : null;
+
+  // Quitar la cabecera y quedarnos con la PRIMERA línea "de contenido"
+  const afterStamp = stamp ? last.slice(last.indexOf("]") + 1).trim() : last;
+  const lines = afterStamp
+    .split("\n")
+    .map(s => s.trim())
+    .filter(Boolean)
+    // Filtramos etiquetas antiguas
+    .filter(s => !/^Nueva conversación/i.test(s))
+    .filter(s => !/^Resumen conversación/i.test(s))
+    .filter(s => !/^\(Origen:/i.test(s))
+    .filter(s => !/^Para descargar/i.test(s));
+
+  const content = lines[0] || "—";
+  const fecha = stamp ? ddmmyyyyFromStamp(stamp) : "";
+
+  return fecha ? `${fecha}: ${content}` : content;
+}
+
+
 function formatResults(properties, startIndex, batchSize = 5) {
   const batch = properties.slice(startIndex, startIndex + batchSize);
   let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
@@ -306,7 +375,18 @@ function formatLeadInfoSummary(leadItem) {
 
   const ubicacion = getTextFieldValue(leadItem, "ubicacion");
   const detalle = getTextFieldValue(leadItem, "detalle");
-  const seguimiento = getTextFieldValue(leadItem, "seguimiento");
+  const seguimientoField = item.fields.find(f => f.external_id === "seguimiento");
+  let seguimientoUltimo = "—";
+  if (seguimientoField && seguimientoField.values && seguimientoField.values[0]?.value) {
+  // Podio suele devolver texto rico; nos traemos solo "fecha: contenido"
+  const fullText = seguimientoField.values[0].value;
+  seguimientoUltimo = extractLastSeguimientoLine(fullText);
+  }
+
+// Ahora, al armar el mensaje:
+const bloqueSeguimiento =
+  `🗂️ Seguimiento (último)\n` +
+  `${seguimientoUltimo}\n`; // <- solo "DD/MM/AAAA: contenido"
 
   const fechaCarga = formatPodioDate(leadItem.created_on);
   const lastAct = calculateDaysSince(leadItem.last_event_on);
@@ -1095,11 +1175,9 @@ app.post("/whatsapp", async (req, res) => {
 
           if (!baseText) {
             // Sin texto y sin transcripción ⇒ igual registramos el audio con link
-            const appended = await appendToLeadSeguimiento(
-              itemId,
-              `**Audio recibido** (no transcrito)\nEnlace: ${mediaUrl0}\n` +
-              `(Para descargar, usar credenciales de Twilio; ver logs si no abre)`
-            );
+            const entry = formatSeguimientoEntry(mediaUrl0);
+            const appended = await appendToLeadSeguimiento(itemId, entry);
+
 
             if (appended.ok) {
               respuesta = "✅ Audio guardado en *seguimiento* (sin transcripción por límite de cuota). ¿Algo más? (*a*/*b* o *cancelar*)";
@@ -1115,10 +1193,9 @@ app.post("/whatsapp", async (req, res) => {
           const summary = await summarizeWithOpenAI(baseText);
           const extraLink = (transcriptRes && !transcriptRes.text && mediaUrl0) ? `\n\n[Audio WhatsApp] ${mediaUrl0}` : "";
 
-          const appended = await appendToLeadSeguimiento(
-            itemId,
-            `**Resumen conversación**\n${summary}${extraLink}\n\n(Origen: ${origin})`
-          );
+          const entry = formatSeguimientoEntry(summary + (extraLink ? ` ${extraLink}` : ""));
+          const appended = await appendToLeadSeguimiento(itemId, entry);
+
 
           if (appended.ok) {
             respuesta = "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
