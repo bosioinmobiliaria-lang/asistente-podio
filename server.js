@@ -133,22 +133,35 @@ function ddmmyyyyFromStamp(stamp) {
 }
 // Devuelve "DD/MM/AAAA: contenido" del último bloque del campo seguimiento
 function extractLastSeguimientoLine(wholeText) {
-  const clean = stripHtml(wholeText).replace(/\r/g, "");
+  const clean = stripHtml((wholeText || "").replace(/\r/g, ""));
   if (!clean) return "—";
-  const parts = clean.split(/\n?-{3,}\n?/); // por si quedó separador histórico
-  const last = parts[parts.length - 1].trim();
-  const m = last.match(/\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]/);
-  const stamp = m ? m[1] : null;
-  let after = stamp ? last.slice(last.indexOf("]") + 1).trim() : last;
-  after = after
-    .split("\n")
-    .map(s => s.trim())
-    .filter(Boolean)
-    .filter(s => !/^Nueva conversación/i.test(s))
-    .filter(s => !/^Resumen conversación/i.test(s))
-    .filter(s => !/^\(Origen:/i.test(s))
-    .filter(s => !/^Para descargar/i.test(s))[0] || "—";
-  return stamp ? `${ddmmyyyyFromStamp(stamp)}: ${after}` : after;
+
+  // Buscamos TODAS las líneas que empiezan con [AAAA-MM-DD HH:MM:SS]
+  const lines = clean.split("\n").map(s => s.trim()).filter(Boolean);
+  let lastStamp = null;
+  let lastContent = null;
+
+  for (const s of lines) {
+    const m = s.match(/^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s*(.*)$/);
+    if (m) {
+      lastStamp = m[1];
+      lastContent = m[2].trim();
+    }
+  }
+
+  if (!lastStamp) return "—";
+
+  // Formato DD/MM/AAAA
+  const fecha = ddmmyyyyFromStamp(lastStamp);
+
+  // Limpiamos restos de etiquetas antiguas si aparecieran
+  const contenido = (lastContent || "")
+    .replace(/^Nueva conversación:?/i, "")
+    .replace(/^Resumen conversación:?/i, "")
+    .replace(/^\(Origen:[^)]+\)/i, "")
+    .trim();
+
+  return `${fecha}: ${contenido || "—"}`;
 }
 
 // --- Resultados de propiedades (WhatsApp) ---
@@ -206,27 +219,43 @@ async function appendToLeadSeguimiento(itemId, newLinePlain) {
   try {
     const token = await getAppAccessTokenFor("leads");
 
-    // Leer el item para obtener field_id + valor actual del campo
+    // 1) Leer item para traer el valor anterior y el field_id
     const item = await getLeadDetails(itemId);
     const segField = item?.fields?.find(f => f.external_id === "seguimiento");
     if (!segField) return { ok: false, error: "Campo 'seguimiento' no encontrado" };
 
-    const prev = segField.values?.[0]?.value || "";
-    const entry = formatSeguimientoEntry(newLinePlain); // => "[YYYY-MM-DD HH:MM:SS] texto"
+    const prev = (segField.values?.[0]?.value || "").toString();
+    const entry = formatSeguimientoEntry(newLinePlain); // "[YYYY-MM-DD HH:MM:SS] contenido"
     const merged = prev ? `${prev}\n${entry}` : entry;
 
-    await axios.put(
-      `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
-      [{ type: "text", value: merged }],
-      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
-    );
-
-    return { ok: true };
+    // 2) INTENTO 1: por external_id (forma más simple)
+    try {
+      await axios.put(
+        `https://api.podio.com/item/${itemId}/value/seguimiento`,
+        [{ value: merged }],
+        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
+      );
+      return { ok: true };
+    } catch (e1) {
+      // 3) INTENTO 2: por field_id (fallback)
+      try {
+        await axios.put(
+          `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
+          [{ value: merged }], // *** importante: sin "type"
+          { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
+        );
+        return { ok: true };
+      } catch (e2) {
+        console.error("PUT seguimiento falló:", e2.response?.data || e2.message);
+        return { ok: false, error: e2.response?.data || e2.message };
+      }
+    }
   } catch (err) {
     console.error("appendToLeadSeguimiento error:", err.response?.data || err.message);
     return { ok: false, error: err.response?.data || err.message };
   }
 }
+
 
 
 /** Busca lead por teléfono o por item_id */
@@ -799,7 +828,7 @@ app.post("/whatsapp", async (req, res) => {
     const numeroRemitente = req.body.From || "";
     let currentState = userStates[numeroRemitente];
 
-    // Menu general (para todos)
+    // Menú general (para todos)
     const menuGeneral =
       "Hola 👋.\n\n" +
       "*1.* ✅ Verificar Teléfono en Leads\n" +
@@ -817,6 +846,7 @@ app.post("/whatsapp", async (req, res) => {
       // Flujo con estado
       // --------------------
       switch (currentState.step) {
+
         // ===== 1) Verificar teléfono en Leads =====
         case "awaiting_phone_to_check": {
           const phoneToCheck = mensajeRecibido.replace(/\D/g, "");
@@ -1104,41 +1134,40 @@ app.post("/whatsapp", async (req, res) => {
           const mediaUrl0 = req.body.MediaUrl0 || "";
 
           let transcriptRes = null;
-          let origin = "texto";
           let rawText = (req.body.Body || "").trim();
 
           // ¿Vino audio?
           if (numMedia > 0 && mediaType0.startsWith("audio/")) {
             transcriptRes = await transcribeAudioFromTwilioMediaUrl(mediaUrl0);
-            origin = transcriptRes?.text ? "audio" : "audio (no transcrito)";
           }
 
+          // baseText = texto escrito o transcripción del audio
           const baseText = (transcriptRes && transcriptRes.text) ? transcriptRes.text : rawText;
 
+          // Si no hay texto ni transcripción, igualmente guardamos link del audio (si hubo audio)
           if (!baseText) {
-            // Sin texto y sin transcripción ⇒ igual registramos el audio con link
-            const entry = formatSeguimientoEntry(mediaUrl0);
-            const appended = await appendToLeadSeguimiento(itemId, entry);
-
-
-            if (appended.ok) {
-              respuesta = "✅ Audio guardado en *seguimiento* (sin transcripción por límite de cuota). ¿Algo más? (*a*/*b* o *cancelar*)";
-              currentState.step = "update_lead_choice";
+            if (numMedia > 0 && mediaUrl0) {
+              const appended = await appendToLeadSeguimiento(
+                itemId,
+                `Audio recibido (no transcrito). Link: ${mediaUrl0}`
+              );
+              if (appended.ok) {
+                respuesta = "✅ Audio guardado en *seguimiento* (sin transcripción). ¿Algo más? (*a*/*b* o *cancelar*)";
+                currentState.step = "update_lead_choice";
+              } else {
+                respuesta = "❌ No pude guardar el seguimiento. Avisá al admin.";
+                delete userStates[numeroRemitente];
+              }
             } else {
-              respuesta = "❌ No pude guardar el audio. Avisá al admin.";
-              delete userStates[numeroRemitente];
+              respuesta = "No recibí texto ni pude transcribir el audio 😕. Probá de nuevo (texto o audio).";
             }
             break;
           }
 
-          // Tenemos texto (nota de voz transcrita o texto escrito)
-          const summary = await summarizeWithOpenAI(baseText);
-          const extraLink = (transcriptRes && !transcriptRes.text && mediaUrl0) ? `\n\n[Audio WhatsApp] ${mediaUrl0}` : "";
+          // Tenemos texto: resumimos y guardamos UNA SOLA VEZ
+          const summary = await summarizeWithAI(baseText); // o summarizeWithOpenAI
 
-          const entry = formatSeguimientoEntry(summary + (extraLink ? ` ${extraLink}` : ""));
-          const appended = await appendToLeadSeguimiento(itemId, entry);
-
-
+          const appended = await appendToLeadSeguimiento(itemId, summary);
           if (appended.ok) {
             respuesta = "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
             currentState.step = "update_lead_choice";
@@ -1177,6 +1206,7 @@ app.post("/whatsapp", async (req, res) => {
         respuesta = menuGeneral;
       }
     }
+
   } catch (err) {
     console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
     if (err.response) {
