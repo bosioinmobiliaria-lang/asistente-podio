@@ -1165,7 +1165,7 @@ app.post("/whatsapp", async (req, res) => {
           }
 
           // Tenemos texto: resumimos y guardamos UNA SOLA VEZ
-          const summary = await summarizeWithAI(baseText); // o summarizeWithOpenAI
+          const summary = await summarizeWithOpenAI(baseText);
 
           const appended = await appendToLeadSeguimiento(itemId, summary);
           if (appended.ok) {
