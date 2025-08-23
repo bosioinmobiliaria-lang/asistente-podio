@@ -109,6 +109,34 @@ function formatPodioDate(dateString) {
   }
 }
 
+function formatResults(properties, startIndex, batchSize = 5) {
+  const batch = properties.slice(startIndex, startIndex + batchSize);
+  let message = startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
+
+  batch.forEach((prop, index) => {
+    const title = prop.title;
+    const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+    const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+    const linkField = prop.fields.find(f => f.external_id === 'enlace-texto-2');
+
+    const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*` : 'Valor no especificado';
+    const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '') : 'No especificada';
+    const localidad = `📍 Localidad: *${localidadLimpia}*`;
+
+    let link = 'Sin enlace web';
+    if (linkField && linkField.values[0].value) {
+      const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
+      if (match && match[1]) link = match[1];
+    }
+
+    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
+    if (index < batch.length - 1) message += '\n\n----------\n\n';
+  });
+
+  const hasMore = (startIndex + batchSize) < properties.length;
+  return { message: message.trim(), hasMore };
+}
+
 function isTestNumber(waFrom) {
   return waFrom === NUMERO_DE_PRUEBA;
 }
@@ -224,24 +252,23 @@ async function summarizeWithOpenAI(text) {
 
 /** Transcribe audio WhatsApp (Twilio MediaUrl0) usando OpenAI Whisper */
 async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
-  if (!mediaUrl) return null;
+  if (!mediaUrl) return { text: null, error: "no_media_url" };
 
   try {
-    // 1) Descargar audio binario desde Twilio (requiere auth de cuenta)
+    // Descargar audio desde Twilio (requiere auth)
     const audioResp = await axios.get(mediaUrl, {
       responseType: "arraybuffer",
       auth: {
         username: process.env.TWILIO_ACCOUNT_SID,
-        password: process.env.TWILIO_AUTH_TOKEN
+        password: process.env.TWILIO_AUTH_TOKEN,
       },
-      timeout: 60000
+      timeout: 60000,
     });
 
     if (!process.env.OPENAI_API_KEY) {
-      return null; // sin API no podemos transcribir
+      return { text: null, error: "no_openai_key" };
     }
 
-    // 2) Enviar a Whisper
     const form = new FormData();
     form.append("file", Buffer.from(audioResp.data), { filename: "audio.ogg" });
     form.append("model", "whisper-1");
@@ -251,18 +278,16 @@ async function transcribeAudioFromTwilioMediaUrl(mediaUrl) {
       "https://api.openai.com/v1/audio/transcriptions",
       form,
       {
-        headers: {
-          ...form.getHeaders(),
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        timeout: 60000
+        headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        timeout: 60000,
       }
     );
 
-    return (data.text || "").trim();
+    return { text: (data.text || "").trim(), error: null };
   } catch (err) {
-    console.error("Transcripción falló:", err.response?.data || err.message);
-    return null;
+    const code = err?.response?.data?.error?.code || err?.code || "unknown";
+    console.error("Transcripción falló:", err?.response?.data || err?.message);
+    return { text: null, error: code };
   }
 }
 
@@ -1032,42 +1057,59 @@ app.post("/whatsapp", async (req, res) => {
           }
 
           case "awaiting_update_lead_content": {
-            const itemId = currentState.leadItemId;
+              const itemId = currentState.leadItemId;
 
-            let rawText = (req.body.Body || "").trim();
-            let transcript = null;
+              const numMedia = parseInt(req.body.NumMedia || "0", 10);
+              const mediaType0 = (req.body.MediaContentType0 || "").toLowerCase().split(";")[0]; // ej: audio/ogg;codecs=opus
+              const mediaUrl0 = req.body.MediaUrl0 || "";
 
-            // ¿Vino audio?
-            const numMedia = parseInt(req.body.NumMedia || "0", 10);
-            const mediaType0 = req.body.MediaContentType0 || "";
-            const mediaUrl0 = req.body.MediaUrl0 || "";
+              let transcriptRes = null;
+              let origin = "texto";
+              let rawText = (req.body.Body || "").trim();
 
-            if (numMedia > 0 && mediaType0.startsWith("audio/")) {
-              transcript = await transcribeAudioFromTwilioMediaUrl(mediaUrl0);
-            }
+              // ¿Vino audio?
+              if (numMedia > 0 && mediaType0.startsWith("audio/")) {
+              transcriptRes = await transcribeAudioFromTwilioMediaUrl(mediaUrl0);
+              origin = transcriptRes?.text ? "audio" : "audio (no transcrito)";
+              }
 
-            const baseText = transcript || rawText;
-            if (!baseText) {
-              respuesta = "No recibí texto ni pude transcribir el audio 😕. Probá de nuevo (texto o audio).";
-              break;
-            }
+              const baseText = (transcriptRes && transcriptRes.text) ? transcriptRes.text : rawText;
 
-            const summary = await summarizeWithOpenAI(baseText);
-
-            const appended = await appendToLeadSeguimiento(
+              if (!baseText) {
+              // Sin texto y sin transcripción ⇒ igual registramos el audio con link
+              const appended = await appendToLeadSeguimiento(
               itemId,
-              `**Resumen conversación**\n${summary}\n\n(Origen: ${transcript ? "audio" : "texto"})`
-            );
+              `**Audio recibido** (no transcrito)\nEnlace: ${mediaUrl0}\n` +
+              `(Para descargar, usar credenciales de Twilio; ver logs si no abre)`
+              );
 
-            if (appended.ok) {
-              respuesta =
-                "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
+              if (appended.ok) {
+              respuesta = "✅ Audio guardado en *seguimiento* (sin transcripción por límite de cuota). ¿Algo más? (*a*/*b* o *cancelar*)";
               currentState.step = "update_lead_choice";
-            } else {
+              } else {
+              respuesta = "❌ No pude guardar el audio. Avisá al admin.";
+              delete userStates[numeroRemitente];
+              }
+              break;
+              }     
+
+              // Tenemos texto (ya sea de nota de voz transcrita o escrito)
+              const summary = await summarizeWithOpenAI(baseText);
+              const extraLink = (transcriptRes && !transcriptRes.text && mediaUrl0) ? `\n\n[Audio WhatsApp] ${mediaUrl0}` : "";
+
+              const appended = await appendToLeadSeguimiento(
+              itemId,
+              `**Resumen conversación**\n${summary}${extraLink}\n\n(Origen: ${origin})`
+              );
+
+              if (appended.ok) {
+              respuesta = "✅ Conversación registrada en *seguimiento* del Lead. ¿Algo más? (*a*/*b* o *cancelar*)";
+              currentState.step = "update_lead_choice";
+              } else {
               respuesta = "❌ No pude guardar el seguimiento. Avisá al admin.";
               delete userStates[numeroRemitente];
-            }
-            break;
+              }
+              break;
           }
 
           // ------- Fallback -------
