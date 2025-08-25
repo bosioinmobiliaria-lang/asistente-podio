@@ -444,19 +444,21 @@ async function getAppAccessTokenFor(appName = "contactos") {
   }
 }
 
-// 🚀 NUEVA FUNCIÓN PARA ENVIAR MENSAJES CON META
+// 🚀 NUEVA FUNCIÓN PARA ENVIAR MENSAJES CON META (VERSIÓN COMPATIBLE)
 async function sendMessage(to, messageData) {
     const API_VERSION = 'v19.0';
     const url = `https://graph.facebook.com/${API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`;
     
-    const payload = {
+    // CAMBIO: Se construye el payload de una forma más tradicional para mayor compatibilidad.
+    const basePayload = {
         messaging_product: "whatsapp",
-        to: to,
-        ...messageData
+        to: to
     };
+    const payload = Object.assign(basePayload, messageData);
 
     console.log("Enviando mensaje a Meta:", JSON.stringify(payload, null, 2));
 
+    // El resto de la función es idéntica
     try {
         await axios.post(url, payload, {
             headers: {
