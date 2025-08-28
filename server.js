@@ -923,8 +923,9 @@ app.post("/whatsapp", async (req, res) => {
 
         // Cancelar y volver al menú
         if (input.toLowerCase() === "cancelar" || input.toLowerCase() === "volver") {
-            await sendMainMenu(from); // <-- CAMBIO: Llama a la nueva función con botones
-            } else if (currentState) {
+            delete userStates[numeroRemitente]; // <-- AÑADIMOS ESTA LÍNEA CRUCIAL
+            await sendMainMenu(from);
+        } else if (currentState) {
 
         } else if (currentState) {
             // --------------------
@@ -934,7 +935,7 @@ app.post("/whatsapp", async (req, res) => {
 
                 // ===== 1) Verificar teléfono en Leads =====
                 case "awaiting_phone_to_check": {
-    const phoneToCheck = input.replace(/\D/g, ""); // Usamos la nueva variable 'input'
+    const phoneToCheck = input.replace(/\D/g, "");
     if (phoneToCheck.length < 9) {
         await sendMessage(from, { type: 'text', text: { body: "El número parece muy corto. Intenta de nuevo." } });
         break;
@@ -945,27 +946,26 @@ app.post("/whatsapp", async (req, res) => {
     if (existingLeads.length > 0) {
         // --- SI ENCUENTRA EL LEAD ---
         const lead = existingLeads[0];
+        // (Aquí va toda la lógica para construir el resumen del lead)
         const leadTitleField = lead.fields.find(f => f.external_id === "contacto-2");
         const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
         const assignedField = lead.fields.find(f => f.external_id === "vendedor-asignado-2");
         const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
         const creationDate = formatPodioDate(lead.created_on);
         const lastActivityDays = calculateDaysSince(lead.last_event_on);
-
         const responseText = `✅ *Lead Encontrado*\n\n` +
             `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
         
         await sendMessage(from, { type: 'text', text: { body: responseText } });
-        delete userStates[numeroRemitente]; // Finaliza el flujo
+        delete userStates[numeroRemitente];
 
     } else {
-        // --- NO ENCUENTRA EL LEAD (¡CON BOTONES!) ---
+        // --- NO ENCUENTRA EL LEAD ---
         currentState.step = "awaiting_creation_confirmation";
         currentState.data = {
             phone: [{ type: "mobile", value: phoneToCheck }],
             "telefono-busqueda": phoneToCheck,
         };
-
         await sendMessage(from, {
             type: "interactive",
             interactive: {
