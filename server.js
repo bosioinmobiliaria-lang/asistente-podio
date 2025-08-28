@@ -477,46 +477,37 @@ async function sendMessage(to, messageData) {
     }
 }
 
-// Función para enviar el menú principal con botones interactivos
+// === MENÚ PRINCIPAL (con header y footer) ===
 async function sendMainMenu(to) {
-    const messageData = {
-        type: "interactive",
-        interactive: {
-            type: "button",
-            body: {
-                text: "Hola 👋. ¿Qué te gustaría hacer?"
-            },
-            action: {
-                buttons: [
-                    {
-                        type: "reply",
-                        reply: {
-                            id: "menu_verificar",
-                            title: "✅ Verificar Lead"
-                        }
-                    },
-                    {
-                        type: "reply",
-                        reply: {
-                            id: "menu_buscar",
-                            title: "🔎 Buscar Propiedad"
-                        }
-                    },
-                    {
-                        type: "reply",
-                        reply: {
-                            id: "menu_actualizar",
-                            title: "✏️ Actualizar Lead"
-                        }
-                    }
-                ]
-            }
-        }
-    };
-    await sendMessage(to, messageData);
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      header: {                    // ← nuevo header
+        type: "text",
+        text: "🤖 Bosi — tu asistente personal"
+      },
+      body: {                      // ← copy más cálido
+        text: "Hola, soy *Bosi* 👋 ¿qué te gustaría hacer?"
+      },
+      footer: {                    // ← pista mínima
+        text: "Tip: escribí *cancelar* para volver al menú"
+      },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "menu_verificar",  title: "✅ Verificar Lead" } },
+          { type: "reply", reply: { id: "menu_buscar",     title: "🔎 Buscar Propiedad" } },
+          { type: "reply", reply: { id: "menu_actualizar", title: "✏️ Actualizar Lead" } }
+        ]
+      }
+    }
+  });
 }
 
-// Lista de orígenes (10 filas, títulos ≤ 24 chars)
+async function sendMenuGeneral(to) { return sendMainMenu(to); }
+
+
+// Lista de orígenes con emoji (≤ 24 chars por fila)
 async function sendOriginList(to) {
   await sendMessage(to, {
     type: "interactive",
@@ -528,16 +519,16 @@ async function sendOriginList(to) {
         sections: [{
           title: "Orígenes",
           rows: [
-            { id: "origin_1",  title: "Inmobiliaria" },
-            { id: "origin_2",  title: "Facebook (Personal)" },
-            { id: "origin_3",  title: "Instagram (Personal)" },
-            { id: "origin_4",  title: "Cartelería (Cel. Inm)" },
-            { id: "origin_5",  title: "Página Web" },
-            { id: "origin_6",  title: "0810" },
-            { id: "origin_7",  title: "Referido" },
-            { id: "origin_8",  title: "Instagram (Inmob.)" },
-            { id: "origin_9",  title: "Publicador externo" },
-            { id: "origin_10", title: "Cliente Antiguo" }
+            { id: "origin_1",  title: "✅ Inmobiliaria" },
+            { id: "origin_2",  title: "✅ Facebook (Pers.)" },
+            { id: "origin_3",  title: "✅ Instagram (Pers.)" },
+            { id: "origin_4",  title: "✅ Cartelería (Cel.Inm)" },
+            { id: "origin_5",  title: "✅ Página Web" },
+            { id: "origin_6",  title: "✅ 0810" },
+            { id: "origin_7",  title: "✅ Referido" },
+            { id: "origin_8",  title: "✅ Instagram (Inmob.)" },
+            { id: "origin_9",  title: "✅ Publicador externo" },
+            { id: "origin_10", title: "✅ Cliente Antiguo" }
           ]
         }]
       }
