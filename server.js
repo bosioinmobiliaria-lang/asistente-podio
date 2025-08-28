@@ -536,6 +536,143 @@ async function sendOriginList(to) {
   });
 }
 
+// 3.1) Tipo de propiedad (lista de 8)
+async function sendPropertyTypeList(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      header: { type: "text", text: "🏠 Buscar propiedades" },
+      body: { text: "¿Qué tipo de propiedad?" },
+      action: {
+        button: "Elegir tipo",
+        sections: [{
+          title: "Tipos",
+          rows: [
+            { id: "ptype_1", title: "🏡 Lote" },                 // 1
+            { id: "ptype_2", title: "🏠 Casa" },                 // 2
+            { id: "ptype_3", title: "🏚️ Chalet" },              // 3
+            { id: "ptype_4", title: "🏢 Dpto." },                // 4 (Departamento)
+            { id: "ptype_5", title: "🏘️ PH" },                  // 5
+            { id: "ptype_6", title: "🏭 Galpón" },               // 6
+            { id: "ptype_7", title: "🏕️ Cabañas" },             // 7
+            { id: "ptype_8", title: "🏬 Locales comerc." }       // 8 (≤24 chars)
+          ]
+        }]
+      }
+    }
+  });
+}
+
+// 3.2) Botones de filtro (minimalista)
+async function sendPropertyFilterButtons(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "¿Querés filtrar por localidad?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "filter_loc",  title: "📍 Por localidad" } },
+          { type: "reply", reply: { id: "filter_skip", title: "⏭️ Seguir sin filtro" } }
+        ]
+      }
+    }
+  });
+}
+
+// 3.3) Lista de localidades (usa tu LOCALIDAD_MAP)
+async function sendLocalidadList(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Elegí la localidad:" },
+      action: {
+        button: "Elegir",
+        sections: [{
+          title: "Localidades",
+          rows: [
+            { id: "loc_1", title: "📍 Villa del Dique" },
+            { id: "loc_2", title: "📍 Villa Rumipal" },
+            { id: "loc_3", title: "📍 Santa Rosa" },
+            { id: "loc_4", title: "📍 Amboy" },
+            { id: "loc_5", title: "📍 San Ignacio" }
+          ]
+        }]
+      }
+    }
+  });
+}
+
+// 3.4) Rango de precio (lista de 10) — títulos cortos (≤24) + emojis
+async function sendPriceRangeList(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "💸 Elegí el rango de precio:" },
+      action: {
+        button: "Elegir rango",
+        sections: [{
+          title: "Rangos",
+          rows: [
+            { id: "price_1",  title: "💸 U$S 0–10.000" },
+            { id: "price_2",  title: "💸 U$S 10.000–20.000" },
+            { id: "price_3",  title: "💸 U$S 20.000–40.000" },
+            { id: "price_4",  title: "💸 U$S 40.000–60.000" },
+            { id: "price_5",  title: "💸 U$S 60.000–80.000" },
+            { id: "price_6",  title: "💸 U$S 80.000–100.000" },
+            { id: "price_7",  title: "💸 U$S 100.000–130.000" },
+            { id: "price_8",  title: "💸 U$S 130.000–160.000" },
+            { id: "price_9",  title: "💸 U$S 160.000–200.000" },
+            { id: "price_10", title: "💸 Más de U$S 200.000" } // dispara high
+          ]
+        }]
+      }
+    }
+  });
+}
+
+// 3.5) Sub-lista de precio alto (>200k)
+async function sendHighPriceList(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "💎 Elegí el rango alto:" },
+      action: {
+        button: "Elegir rango",
+        sections: [{
+          title: "Rangos altos",
+          rows: [
+            { id: "price_h1", title: "U$S 200.000–300.000" },
+            { id: "price_h2", title: "U$S 300.000–500.000" },
+            { id: "price_h3", title: "Más de U$S 500.000" }
+          ]
+        }]
+      }
+    }
+  });
+}
+
+// 3.6) Paginado de resultados (5 por página) + botón "Ver más"
+async function sendPropertiesPage(to, properties, startIndex = 0) {
+  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
+  await sendMessage(to, { type: 'text', text: { body: message } });
+
+  if (hasMore) {
+    await sendMessage(to, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "¿Ver más resultados?" },
+        action: { buttons: [{ type: "reply", reply: { id: "props_more", title: "➡️ Ver más" } }] }
+      }
+    });
+  }
+}
+
 async function searchProperties(filters) {
   const appId = process.env.PODIO_PROPIEDADES_APP_ID;
   const token = await getAppAccessTokenFor("propiedades");
@@ -852,19 +989,25 @@ const ORIGEN_CONTACTO_MAP = {
   '10': 12  // Cliente Antiguo
 };
 
-const PRECIO_RANGOS_MAP = {
-    '1': { from: 0, to: 10000 },
-    '2': { from: 10000, to: 20000 },
-    '3': { from: 20000, to: 40000 },
-    '4': { from: 40000, to: 60000 },
-    '5': { from: 60000, to: 80000 },
-    '6': { from: 80000, to: 100000 },
-    '7': { from: 100000, to: 130000 },
-    '8': { from: 130000, to: 160000 },
-    '9': { from: 160000, to: 200000 },
-    '10': { from: 200000, to: 300000 },
-    '11': { from: 300000, to: 500000 },
-    '12': { from: 500000, to: 99999999 },
+// --- Rangos de precio (lista principal de 10) ---
+const PRICE_RANGES_10 = {
+  '1':  { from: 0,      to: 10000 },
+  '2':  { from: 10000,  to: 20000 },
+  '3':  { from: 20000,  to: 40000 },
+  '4':  { from: 40000,  to: 60000 },
+  '5':  { from: 60000,  to: 80000 },
+  '6':  { from: 80000,  to: 100000 },
+  '7':  { from: 100000, to: 130000 },
+  '8':  { from: 130000, to: 160000 },
+  '9':  { from: 160000, to: 200000 },
+  '10': { from: 200000, to: 99999999, next: true } // dispara sub-lista alta
+};
+
+// --- Rangos altos (si eligen > 200k) ---
+const PRICE_RANGES_HIGH = {
+  h1: { from: 200000, to: 300000 },
+  h2: { from: 300000, to: 500000 },
+  h3: { from: 500000, to: 99999999 },
 };
 
 // ✅ IDs REALES (extraídos de tus capturas)
@@ -1153,6 +1296,129 @@ case "awaiting_contact_type": {
   break;
 }
 
+// ===== Tipo de propiedad elegido =====
+case "awaiting_property_type": {
+  const m = /^ptype_(\d)$/.exec(input || "");
+  if (!m) { await sendPropertyTypeList(from); break; }
+  const tipoKey = m[1]; // "1".."8"
+  const tipoId = TIPO_PROPIEDAD_MAP[tipoKey];
+  if (!tipoId) { await sendPropertyTypeList(from); break; }
+
+  currentState.filters = currentState.filters || {};
+  currentState.filters.tipo = tipoId;
+
+  currentState.step = "awaiting_property_filter";
+  await sendPropertyFilterButtons(from);
+  break;
+}
+
+// ===== Botones de filtro =====
+case "awaiting_property_filter": {
+  if (input === "filter_loc") {
+    currentState.step = "awaiting_localidad";
+    await sendLocalidadList(from);
+  } else if (input === "filter_skip") {
+    currentState.step = "awaiting_price_range";
+    await sendPriceRangeList(from);
+  } else {
+    await sendPropertyFilterButtons(from);
+  }
+  break;
+}
+
+// ===== Localidad (si eligió filtrar) =====
+case "awaiting_localidad": {
+  const m = /^loc_(\d)$/.exec(input || "");
+  if (!m) { await sendLocalidadList(from); break; }
+  const locKey = m[1]; // "1".."5"
+  const locId = LOCALIDAD_MAP[locKey];
+  if (!locId) { await sendLocalidadList(from); break; }
+
+  currentState.filters = currentState.filters || {};
+  currentState.filters.localidad = locId;
+
+  currentState.step = "awaiting_price_range";
+  await sendPriceRangeList(from);
+  break;
+}
+
+// ===== Rango principal =====
+case "awaiting_price_range": {
+  const m = /^price_(\d+)$/.exec(input || "");
+  if (!m) { await sendPriceRangeList(from); break; }
+  const k = m[1];
+  const range = PRICE_RANGES_10[k];
+  if (!range) { await sendPriceRangeList(from); break; }
+
+  if (range.next) {
+    currentState.step = "awaiting_price_range_high";
+    await sendHighPriceList(from);
+    break;
+  }
+
+  currentState.filters.precio = { from: range.from, to: range.to };
+
+  // BUSCAR y mostrar página 1
+  const items = await searchProperties(currentState.filters);
+  if (!items || !items.length) {
+    await sendMessage(from, { type: 'text', text: { body: "😕 No encontré resultados con esos filtros." } });
+    delete userStates[numeroRemitente];
+    break;
+  }
+
+  currentState.step = "showing_results";
+  currentState.results = items;
+  currentState.nextIndex = 0;
+  await sendPropertiesPage(from, items, currentState.nextIndex);
+  currentState.nextIndex += 5;
+  break;
+}
+
+// ===== Rango alto (>200k) =====
+case "awaiting_price_range_high": {
+  let r = null;
+  if (input === "price_h1") r = PRICE_RANGES_HIGH.h1;
+  if (input === "price_h2") r = PRICE_RANGES_HIGH.h2;
+  if (input === "price_h3") r = PRICE_RANGES_HIGH.h3;
+  if (!r) { await sendHighPriceList(from); break; }
+
+  currentState.filters.precio = { from: r.from, to: r.to };
+
+  const items = await searchProperties(currentState.filters);
+  if (!items || !items.length) {
+    await sendMessage(from, { type: 'text', text: { body: "😕 No encontré resultados con esos filtros." } });
+    delete userStates[numeroRemitente];
+    break;
+  }
+
+  currentState.step = "showing_results";
+  currentState.results = items;
+  currentState.nextIndex = 0;
+  await sendPropertiesPage(from, items, currentState.nextIndex);
+  currentState.nextIndex += 5;
+  break;
+}
+
+// ===== Paginado: botón "Ver más" =====
+case "showing_results": {
+  if (input === "props_more") {
+    const items = currentState.results || [];
+    const idx = currentState.nextIndex || 0;
+    if (idx >= items.length) {
+      await sendMessage(from, { type: 'text', text: { body: "No hay más resultados 🙂" } });
+      delete userStates[numeroRemitente];
+      break;
+    }
+    await sendPropertiesPage(from, items, idx);
+    currentState.nextIndex = idx + 5;
+  } else {
+    // Cualquier otra cosa, volvemos al menú
+    delete userStates[numeroRemitente];
+    await sendMainMenu(from);
+  }
+  break;
+}
+
                 
                 // ... Y así sucesivamente para todos los demás `case` ...
                 // Simplemente reemplaza `respuesta =` por `await sendMessage(from, { type: 'text', text: { body: ... } });`
@@ -1168,22 +1434,21 @@ case "awaiting_contact_type": {
             } // end switch con estado
 
         } else {
-              // Sin estado: menú inicial
-                  if (input === "menu_verificar") {
-                    userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
-                    const responseText = "✅ ¡Entendido! Enviame el número de celular que quieres consultar 📱";
-                    await sendMessage(from, { type: 'text', text: { body: responseText } });
-              } else if (input === "menu_buscar") {
-                    userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
-                    // Aquí irá el código para enviar el siguiente menú de botones (lo hacemos después)
-                    await sendMessage(from, { type: 'text', text: { body: "Ok, empecemos a buscar una propiedad..." } }); 
-              } else if (input === "menu_actualizar") { // <-- CAMBIO
-                    userStates[numeroRemitente] = { step: "update_lead_start" };
-                    await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
-              } else {
-                    await sendMainMenu(from); // <-- CAMBIO: Llama a la nueva función con botones
-                }
-                }
+  // Sin estado: menú inicial
+  if (input === "menu_verificar") {
+    userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
+    const responseText = "✅ ¡Entendido! Enviame el número de celular que querés consultar 📱";
+    await sendMessage(from, { type: 'text', text: { body: responseText } });
+  } else if (input === "menu_buscar") {
+    userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
+    await sendPropertyTypeList(from);
+  } else if (input === "menu_actualizar") { // <-- CAMBIO
+    userStates[numeroRemitente] = { step: "update_lead_start" };
+    await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
+  } else {
+    await sendMainMenu(from); // <-- Botonera principal
+  }
+}
 
     } catch (err) {
         console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
