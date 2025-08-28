@@ -922,11 +922,10 @@ app.post("/whatsapp", async (req, res) => {
         }
 
         // Cancelar y volver al menú
-        if (input.toLowerCase() === "cancelar" || input.toLowerCase() === "volver") {
-            delete userStates[numeroRemitente]; // <-- AÑADIMOS ESTA LÍNEA CRUCIAL
+            const low = (input || "").toLowerCase(); // ← evita crash si input es undefined
+        if (low === "cancelar" || low === "volver") {
+            delete userStates[numeroRemitente];
             await sendMainMenu(from);
-        } else if (currentState) {
-
         } else if (currentState) {
             // --------------------
             // Flujo con estado (LA LÓGICA INTERNA NO CAMBIA, SOLO EL ENVÍO)
@@ -941,7 +940,7 @@ app.post("/whatsapp", async (req, res) => {
     // 1. MEJORA DEL MENSAJE DE ERROR
     if (phoneToCheck.length < 9) {
         console.log("==> ERROR: El número es muy corto o inválido.");
-        const responseText = "❌ El número no parece correcto. Por favor, envíalo de nuevo sin el 0 ni el 15.";
+        const responseText = "😕 Número inválido. Envíalo de nuevo *sin 0 ni 15*.";
         await sendMessage(from, { type: 'text', text: { body: responseText } });
         break;
     }
@@ -993,20 +992,24 @@ app.post("/whatsapp", async (req, res) => {
 }
 
                 case "awaiting_creation_confirmation": {
-                    if (mensajeRecibido === "1") {
-                        currentState.step = "awaiting_name_and_type";
-                        const responseText = "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
-                            "*1.* Nombre y Apellido\n*2.* Tipo de Contacto\n(*1.* Comprador, *2.* Propietario)";
-                        await sendMessage(from, { type: 'text', text: { body: responseText } });
-                    } else {
-                        delete userStates[numeroRemitente];
-                        await sendMessage(from, { type: 'text', text: { body: "Ok, operación cancelada. Volviendo al menú principal." } });
-                    }
-                    break;
-                }
+          if (input === "confirm_create_yes") {
+            currentState.step = "awaiting_name_and_type";
+              const responseText = "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
+                    "1) Nombre y Apellido\n2) Tipo de Contacto\n(1 Comprador, 2 Propietario)";
+                 await sendMessage(from, { type: 'text', text: { body: responseText } });
+               } else if (input === "confirm_create_no" || low === "cancelar") {
+                  delete userStates[numeroRemitente];
+                 await sendMessage(from, { type: 'text', text: { body: "Operación cancelada. Volviendo al menú." } });
+                await sendMainMenu(from);
+                } else {
+                await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
+                 }
+                break;
+}
+
 
                 case "awaiting_name_and_type": {
-                    const info = mensajeRecibido.split("\n").map(line => line.trim());
+                    const info = (input || "").split("\n").map(line => line.trim());
                     if (info.length < 2) {
                         await sendMessage(from, { type: 'text', text: { body: "❌ Faltan datos. Primera línea: Nombre. Segunda línea: Tipo (1 o 2)." } });
                         break;
@@ -1039,7 +1042,7 @@ app.post("/whatsapp", async (req, res) => {
                 }
 
                 case "awaiting_origin": {
-                    const origenId = ORIGEN_CONTACTO_MAP[mensajeRecibido];
+                    const origenId = ORIGEN_CONTACTO_MAP[input];
                     if (!origenId) {
                         await sendMessage(from, { type: 'text', text: { body: "Opción no válida. Respondé con uno de los números de la lista." } });
                         break;
