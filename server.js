@@ -472,6 +472,45 @@ async function sendMessage(to, messageData) {
     }
 }
 
+// Función para enviar el menú principal con botones interactivos
+async function sendMainMenu(to) {
+    const messageData = {
+        type: "interactive",
+        interactive: {
+            type: "button",
+            body: {
+                text: "Hola 👋. ¿Qué te gustaría hacer?"
+            },
+            action: {
+                buttons: [
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_verificar",
+                            title: "✅ Verificar Lead"
+                        }
+                    },
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_buscar",
+                            title: "🔎 Buscar Propiedad"
+                        }
+                    },
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_actualizar",
+                            title: "✏️ Actualizar Lead"
+                        }
+                    }
+                ]
+            }
+        }
+    };
+    await sendMessage(to, messageData);
+}
+
 async function searchProperties(filters) {
   const appId = process.env.PODIO_PROPIEDADES_APP_ID;
   const token = await getAppAccessTokenFor("propiedades");
@@ -870,9 +909,9 @@ app.post("/whatsapp", async (req, res) => {
         }
 
         // Cancelar y volver al menú
-        if (["cancelar", "volver"].includes(mensajeRecibido.toLowerCase())) {
-            delete userStates[numeroRemitente];
-            await sendMenuGeneral();
+        if (input.toLowerCase() === "cancelar" || input.toLowerCase() === "volver") {
+            await sendMainMenu(from); // <-- CAMBIO: Llama a la nueva función con botones
+            } else if (currentState) {
 
         } else if (currentState) {
             // --------------------
@@ -996,25 +1035,23 @@ app.post("/whatsapp", async (req, res) => {
             } // end switch con estado
 
         } else {
-            // --------------------
-            // Sin estado: menú inicial
-            // --------------------
-            if (mensajeRecibido === "1") {
-                userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
-                await sendMessage(from, { type: 'text', text: { body: "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...)." } });
-            } else if (mensajeRecibido === "2") {
-                userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
-                const responseText = "🏡 Perfecto, empecemos. ¿Qué tipo de propiedad buscás?\n\n" +
-                    "*1.* 🌳 Lote\n*2.* 🏠 Casa\n*3.* 🏡 Chalet\n*4.* 🏢 Departamento\n*5.* 🏘️ PH\n*6.* 🏭 Galpón\n*7.* 🛖 Cabañas\n*8.* 🏪 Locales comerciales\n\n" +
-                    "Escribe *volver* para ir al menú anterior.";
-                await sendMessage(from, { type: 'text', text: { body: responseText } });
-            } else if (mensajeRecibido === "3") {
-                userStates[numeroRemitente] = { step: "update_lead_start" };
-                await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
-            } else {
-                await sendMenuGeneral();
-            }
-        }
+                // --------------------
+                // Sin estado: menú inicial
+                // --------------------
+                    if (input === "menu_verificar") { // <-- CAMBIO: De "1" a ID del botón
+                    userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
+                    await sendMessage(from, { type: 'text', text: { body: "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...)." } });
+                  } else if (input === "menu_buscar") { // <-- CAMBIO
+                    userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
+                    // Aquí irá el código para enviar el siguiente menú de botones (lo hacemos después)
+                    await sendMessage(from, { type: 'text', text: { body: "Ok, empecemos a buscar una propiedad..." } }); 
+                    } else if (input === "menu_actualizar") { // <-- CAMBIO
+                    userStates[numeroRemitente] = { step: "update_lead_start" };
+                    await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
+                } else {
+                    await sendMainMenu(from); // <-- CAMBIO: Llama a la nueva función con botones
+                }
+                }
 
     } catch (err) {
         console.error("\n--- ERROR DETALLADO EN WEBHOOK ---");
