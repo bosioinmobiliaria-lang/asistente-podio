@@ -934,39 +934,54 @@ app.post("/whatsapp", async (req, res) => {
 
                 // ===== 1) Verificar teléfono en Leads =====
                 case "awaiting_phone_to_check": {
-                    const phoneToCheck = mensajeRecibido.replace(/\D/g, "");
-                    if (phoneToCheck.length < 9) {
-                        await sendMessage(from, { type: 'text', text: { body: "El número parece muy corto. Enviá sin 0 y sin 15 (ej: 351... ó 3546...)." }});
-                        break;
-                    }
+    const phoneToCheck = input.replace(/\D/g, ""); // Usamos la nueva variable 'input'
+    if (phoneToCheck.length < 9) {
+        await sendMessage(from, { type: 'text', text: { body: "El número parece muy corto. Intenta de nuevo." } });
+        break;
+    }
 
-                    const existingLeads = await searchLeadByPhone(phoneToCheck);
+    const existingLeads = await searchLeadByPhone(phoneToCheck);
 
-                    if (existingLeads.length > 0) {
-                        const lead = existingLeads[0];
-                        const leadTitleField = lead.fields.find(f => f.external_id === "contacto-2");
-                        const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
-                        const assignedField = lead.fields.find(f => f.external_id === "vendedor-asignado-2");
-                        const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
-                        const creationDate = formatPodioDate(lead.created_on);
-                        const lastActivityDays = calculateDaysSince(lead.last_event_on);
+    if (existingLeads.length > 0) {
+        // --- SI ENCUENTRA EL LEAD ---
+        const lead = existingLeads[0];
+        const leadTitleField = lead.fields.find(f => f.external_id === "contacto-2");
+        const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
+        const assignedField = lead.fields.find(f => f.external_id === "vendedor-asignado-2");
+        const assignedTo = assignedField ? assignedField.values[0].value.text : "No asignado";
+        const creationDate = formatPodioDate(lead.created_on);
+        const lastActivityDays = calculateDaysSince(lead.last_event_on);
 
-                        const responseText = `✅ *Lead Encontrado*\n\n` +
-                            `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
-                        await sendMessage(from, { type: 'text', text: { body: responseText } });
-                        delete userStates[numeroRemitente];
-                    } else {
-                        currentState.step = "awaiting_creation_confirmation";
-                        currentState.data = {
-                            phone: [{ type: "mobile", value: phoneToCheck }],
-                            "telefono-busqueda": phoneToCheck,
-                        };
-                        const responseText = `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n` +
-                            `¿Querés crear un nuevo *Contacto*?\n\n*1.* Sí, crear ahora\n*2.* No, cancelar`;
-                        await sendMessage(from, { type: 'text', text: { body: responseText } });
-                    }
-                    break;
+        const responseText = `✅ *Lead Encontrado*\n\n` +
+            `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
+        
+        await sendMessage(from, { type: 'text', text: { body: responseText } });
+        delete userStates[numeroRemitente]; // Finaliza el flujo
+
+    } else {
+        // --- NO ENCUENTRA EL LEAD (¡CON BOTONES!) ---
+        currentState.step = "awaiting_creation_confirmation";
+        currentState.data = {
+            phone: [{ type: "mobile", value: phoneToCheck }],
+            "telefono-busqueda": phoneToCheck,
+        };
+
+        await sendMessage(from, {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Deseas crear un nuevo Contacto?` },
+                action: {
+                    buttons: [
+                        { type: "reply", reply: { id: "confirm_create_yes", title: "Sí, crear ahora" } },
+                        { type: "reply", reply: { id: "confirm_create_no", title: "No, cancelar" } }
+                    ]
                 }
+            }
+        });
+    }
+    break;
+}
 
                 case "awaiting_creation_confirmation": {
                     if (mensajeRecibido === "1") {
