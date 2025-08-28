@@ -478,6 +478,45 @@ async function sendMessage(to, messageData) {
 }
 
 // Función para enviar el menú principal con botones interactivos
+async function sendMainMenu(to) {
+    const messageData = {
+        type: "interactive",
+        interactive: {
+            type: "button",
+            body: {
+                text: "Hola 👋. ¿Qué te gustaría hacer?"
+            },
+            action: {
+                buttons: [
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_verificar",
+                            title: "✅ Verificar Lead"
+                        }
+                    },
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_buscar",
+                            title: "🔎 Buscar Propiedad"
+                        }
+                    },
+                    {
+                        type: "reply",
+                        reply: {
+                            id: "menu_actualizar",
+                            title: "✏️ Actualizar Lead"
+                        }
+                    }
+                ]
+            }
+        }
+    };
+    await sendMessage(to, messageData);
+}
+
+// Lista de orígenes (10 filas, títulos ≤ 24 chars)
 async function sendOriginList(to) {
   await sendMessage(to, {
     type: "interactive",
@@ -492,11 +531,11 @@ async function sendOriginList(to) {
             { id: "origin_1",  title: "Inmobiliaria" },
             { id: "origin_2",  title: "Facebook (Personal)" },
             { id: "origin_3",  title: "Instagram (Personal)" },
-            { id: "origin_4",  title: "Carteleria (Cel. inm.)" },
+            { id: "origin_4",  title: "Cartelería (Cel. Inm)" },
             { id: "origin_5",  title: "Página Web" },
             { id: "origin_6",  title: "0810" },
             { id: "origin_7",  title: "Referido" },
-            { id: "origin_8",  title: "Instagram (Inm.)" },
+            { id: "origin_8",  title: "Instagram (Inmob.)" },
             { id: "origin_9",  title: "Publicador externo" },
             { id: "origin_10", title: "Cliente Antiguo" }
           ]
