@@ -1048,20 +1048,19 @@ app.post("/whatsapp", async (req, res) => {
             } // end switch con estado
 
         } else {
-                // --------------------
-                // Sin estado: menú inicial
-                // --------------------
-                    if (input === "menu_verificar") { // <-- CAMBIO: De "1" a ID del botón
+              // Sin estado: menú inicial
+                  if (input === "menu_verificar") {
                     userStates[numeroRemitente] = { step: "awaiting_phone_to_check" };
-                    await sendMessage(from, { type: 'text', text: { body: "Entendido. Enviame el *número de celular* que querés verificar (sin 0 ni 15, ej: 351..., 3546...)." } });
-                  } else if (input === "menu_buscar") { // <-- CAMBIO
+                    const responseText = "✅ ¡Entendido! Enviame el número de celular que quieres consultar 📱";
+                    await sendMessage(from, { type: 'text', text: { body: responseText } });
+              } else if (input === "menu_buscar") {
                     userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
                     // Aquí irá el código para enviar el siguiente menú de botones (lo hacemos después)
                     await sendMessage(from, { type: 'text', text: { body: "Ok, empecemos a buscar una propiedad..." } }); 
-                    } else if (input === "menu_actualizar") { // <-- CAMBIO
+              } else if (input === "menu_actualizar") { // <-- CAMBIO
                     userStates[numeroRemitente] = { step: "update_lead_start" };
                     await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
-                } else {
+              } else {
                     await sendMainMenu(from); // <-- CAMBIO: Llama a la nueva función con botones
                 }
                 }
