@@ -31,6 +31,11 @@ function cleanDeep(obj) {
   return obj;
 }
 
+// --- Validación celular Argentina: 10 dígitos (sin 0 ni 15) ---
+function isValidArMobile(digits) {
+  return /^\d{10}$/.test(digits);
+}
+
 function splitDateTime(str) {
   if (typeof str !== "string") return null;
   const s = str.replace("T", " ").trim();
@@ -511,6 +516,35 @@ async function sendMainMenu(to) {
     await sendMessage(to, messageData);
 }
 
+async function sendOriginList(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "🧭 Elegí el *origen del contacto*:" },
+      action: {
+        button: "Elegir origen",
+        sections: [{
+          title: "Orígenes",
+          rows: [
+            { id: "origin_1",  title: "Inmobiliaria" },
+            { id: "origin_2",  title: "Facebook" },
+            { id: "origin_3",  title: "Cartelería" },
+            { id: "origin_4",  title: "Página Web" },
+            { id: "origin_5",  title: "Showroom" },
+            { id: "origin_6",  title: "0810" },
+            { id: "origin_7",  title: "Referido" },
+            { id: "origin_8",  title: "Instagram (Personal)" },
+            { id: "origin_9",  title: "Instagram (Inmobiliaria)" },
+            { id: "origin_10", title: "Publicador externo" },
+            { id: "origin_11", title: "Cliente antiguo" }
+          ]
+        }]
+      }
+    }
+  });
+}
+
 async function searchProperties(filters) {
   const appId = process.env.PODIO_PROPIEDADES_APP_ID;
   const token = await getAppAccessTokenFor("propiedades");
@@ -932,18 +966,68 @@ app.post("/whatsapp", async (req, res) => {
             // --------------------
             switch (currentState.step) {
 
+      case "awaiting_name_only": {
+  const nombre = (input || "").trim();
+  if (!nombre || nombre.length < 3) {
+    await sendMessage(from, { type: 'text', text: { body: "🤏 Nombre muy corto. Probá de nuevo (Nombre y Apellido)." } });
+    break;
+  }
+  currentState.data = currentState.data || {};
+  currentState.data.title = nombre;
+
+  // Pasamos a elegir tipo con botones
+  currentState.step = "awaiting_contact_type";
+  await sendMessage(from, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "👤 ¿Qué tipo de contacto es?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "type_buyer", title: "🛒 Comprador" } },
+          { type: "reply", reply: { id: "type_owner", title: "🏠 Propietario" } }
+        ]
+      }
+    }
+  });
+  break;
+}
+
+case "awaiting_contact_type": {
+  let tipoId = null, tipoTexto = "";
+  if (input === "type_buyer") { tipoId = TIPO_CONTACTO_MAP['1']; tipoTexto = "Comprador"; }
+  if (input === "type_owner") { tipoId = TIPO_CONTACTO_MAP['2']; tipoTexto = "Propietario"; }
+
+  if (!tipoId) {
+    await sendMessage(from, { type: 'text', text: { body: "Elegí una opción 👆 o escribí *cancelar*." } });
+    break;
+  }
+
+  currentState.data["tipo-de-contacto"] = [tipoId];
+
+  const telefono = (currentState.data.phone?.[0]?.value) || "—";
+  const nombre = currentState.data.title || "—";
+
+  // Resumen corto + pasamos a origen (con LISTA interactiva)
+  await sendMessage(from, { type: 'text', text: { body: `✅ Datos ok\n\n• Nombre: ${nombre}\n• Tel.: ${telefono}\n• Tipo: ${tipoTexto}` } });
+
+  // Mostrar lista de orígenes
+  currentState.step = "awaiting_origin";
+  await sendOriginList(from);
+  break;
+}
+
+
                 // ===== 1) Verificar teléfono en Leads =====
                 case "awaiting_phone_to_check": {
     console.log("==> PASO 1: Entrando al flujo 'awaiting_phone_to_check'.");
     const phoneToCheck = input.replace(/\D/g, "");
 
     // 1. MEJORA DEL MENSAJE DE ERROR
-    if (phoneToCheck.length < 9) {
-        console.log("==> ERROR: El número es muy corto o inválido.");
-        const responseText = "😕 Número inválido. Envíalo de nuevo *sin 0 ni 15*.";
-        await sendMessage(from, { type: 'text', text: { body: responseText } });
+        if (!isValidArMobile(phoneToCheck)) {
+        await sendMessage(from, { type: 'text', text: { body: "😕 Número inválido. Envíalo de nuevo *sin 0 ni 15* (10 dígitos)." } });
         break;
-    }
+      }
 
     console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
     const existingLeads = await searchLeadByPhone(phoneToCheck);
@@ -992,19 +1076,17 @@ app.post("/whatsapp", async (req, res) => {
 }
 
                 case "awaiting_creation_confirmation": {
-          if (input === "confirm_create_yes") {
-            currentState.step = "awaiting_name_and_type";
-              const responseText = "📝 Enviame estos datos, *cada uno en una nueva línea*:\n\n" +
-                    "1) Nombre y Apellido\n2) Tipo de Contacto\n(1 Comprador, 2 Propietario)";
-                 await sendMessage(from, { type: 'text', text: { body: responseText } });
-               } else if (input === "confirm_create_no" || low === "cancelar") {
-                  delete userStates[numeroRemitente];
-                 await sendMessage(from, { type: 'text', text: { body: "Operación cancelada. Volviendo al menú." } });
-                await sendMainMenu(from);
-                } else {
-                await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
-                 }
-                break;
+  if (input === "confirm_create_yes") {
+    currentState.step = "awaiting_name_only";
+    await sendMessage(from, { type: 'text', text: { body: "✍️ Decime *Nombre y Apellido*." } });
+  } else if (input === "confirm_create_no" || low === "cancelar") {
+    delete userStates[numeroRemitente];
+    await sendMessage(from, { type: 'text', text: { body: "Operación cancelada. Volvemos al menú." } });
+    await sendMainMenu(from);
+  } else {
+    await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
+  }
+  break;
 }
 
 
@@ -1042,24 +1124,35 @@ app.post("/whatsapp", async (req, res) => {
                 }
 
                 case "awaiting_origin": {
-                    const origenId = ORIGEN_CONTACTO_MAP[input];
-                    if (!origenId) {
-                        await sendMessage(from, { type: 'text', text: { body: "Opción no válida. Respondé con uno de los números de la lista." } });
-                        break;
-                    }
+  // Esperamos un list_reply con ids "origin_#"
+  const m = /^origin_(\d+)$/.exec(input || "");
+  if (!m) {
+    await sendOriginList(from);
+    break;
+  }
+  const key = m[1]; // "1" .. "11"
+  const origenId = ORIGEN_CONTACTO_MAP[key];
+  if (!origenId) {
+    await sendOriginList(from);
+    break;
+  }
 
-                    currentState.data["contact-type"] = [origenId];
-                    const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-                    currentState.data["vendedor-asignado-2"] = [vendedorId];
-                    currentState.data["fecha-de-creacion"] = buildPodioDateObject(new Date());
-                    delete currentState.data["telefono-busqueda"];
+  currentState.data["contact-type"] = [origenId];
+  const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+  currentState.data["vendedor-asignado-2"] = [vendedorId];
+  currentState.data["fecha-de-creacion"] = buildPodioDateObject(new Date());
+  delete currentState.data["telefono-busqueda"];
 
-                    await createItemIn("contactos", currentState.data);
+  try {
+    await createItemIn("contactos", currentState.data);
+    await sendMessage(from, { type: 'text', text: { body: "🎉 Contacto creado y asignado." } });
+  } catch (e) {
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude crear el contacto. Probá más tarde." } });
+  }
+  delete userStates[numeroRemitente];
+  break;
+}
 
-                    await sendMessage(from, { type: 'text', text: { body: `✅ ¡Genial! Contacto *"${currentState.data.title}"* creado y asignado correctamente.` } });
-                    delete userStates[numeroRemitente];
-                    break;
-                }
                 
                 // ... Y así sucesivamente para todos los demás `case` ...
                 // Simplemente reemplaza `respuesta =` por `await sendMessage(from, { type: 'text', text: { body: ... } });`
