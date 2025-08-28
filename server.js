@@ -882,17 +882,30 @@ app.post("/whatsapp", async (req, res) => {
     res.sendStatus(200);
 
     try {
-        // CAMBIO 2: Extraemos el mensaje del cuerpo (payload) de Meta.
         const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-        if (!message || message.type !== 'text') {
-            // Por ahora, solo procesamos mensajes de texto en esta migración 1 a 1.
-            return; 
-        }
+        if (!message) return;
 
-        const from = message.from; // Número del usuario, ej: 549351...
-        const mensajeRecibido = (message.text.body || "").trim();
-        const numeroRemitente = `whatsapp:+${from}`; // Mantenemos tu formato para los MAPS
+        const from = message.from;
+        const numeroRemitente = `whatsapp:+${from}`;
         let currentState = userStates[numeroRemitente];
+
+        // --- INICIO DEL BLOQUE CORREGIDO ---
+        let userInput = '';
+        let interactiveReplyId = null;
+
+        if (message.type === 'text') {
+            userInput = message.text.body.trim();
+        } else if (message.type === 'interactive') {
+            const interactive = message.interactive;
+            if (interactive.type === 'button_reply') {
+                interactiveReplyId = interactive.button_reply.id;
+            } else if (interactive.type === 'list_reply') {
+                // Lo dejamos preparado para futuros menús de lista
+                interactiveReplyId = interactive.list_reply.id;
+            }
+        }
+        
+        const input = interactiveReplyId || userInput;
 
         // CAMBIO 3: La variable "respuesta" se elimina. Cada respuesta se envía directamente.
         // const twiml = new MessagingResponse();
