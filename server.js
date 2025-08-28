@@ -517,29 +517,6 @@ async function sendMainMenu(to) {
 }
 
 async function sendOriginList(to) {
-  const rows = [
-    { id: "origin_1",  title: "Inmobiliaria" },
-    { id: "origin_2",  title: "Facebook" },
-    { id: "origin_3",  title: "Cartelería" },
-    { id: "origin_4",  title: "Página Web" },
-    { id: "origin_5",  title: "Showroom" },
-    { id: "origin_6",  title: "0810" },
-    { id: "origin_7",  title: "Referido" },
-    { id: "origin_8",  title: "Instagram (Personal)" },
-    { id: "origin_9",  title: "Instagram (Inmobiliaria)" },
-    { id: "origin_10", title: "Publicador externo" },
-    { id: "origin_11", title: "Cliente antiguo" }
-  ];
-
-  // WhatsApp permite máx. 10 filas por sección -> las partimos en bloques de 10
-  const sections = [];
-  for (let i = 0; i < rows.length; i += 10) {
-    sections.push({
-      title: i === 0 ? "Orígenes (1–10)" : "Más opciones",
-      rows: rows.slice(i, i + 10)
-    });
-  }
-
   await sendMessage(to, {
     type: "interactive",
     interactive: {
@@ -547,7 +524,21 @@ async function sendOriginList(to) {
       body: { text: "🧭 Elegí el *origen del contacto*:" },
       action: {
         button: "Elegir origen",
-        sections
+        sections: [{
+          title: "Orígenes",
+          rows: [
+            { id: "origin_1",  title: "Inmobiliaria" },
+            { id: "origin_2",  title: "Facebook (Personal)" },
+            { id: "origin_3",  title: "Instagram (Personal)" },
+            { id: "origin_4",  title: "Carteleria (Celu inmobiliaria)" },
+            { id: "origin_5",  title: "Pagina Web" },
+            { id: "origin_6",  title: "0810" },
+            { id: "origin_7",  title: "Referido" },
+            { id: "origin_8",  title: "Instagram (Inmobiliaria)" },
+            { id: "origin_9",  title: "Publicador externo" },
+            { id: "origin_10", title: "Cliente Antiguo" }
+          ]
+        }]
       }
     }
   });
@@ -857,7 +848,16 @@ const VENDEDORES_CONTACTOS_MAP = {
 const VENDEDOR_POR_DEFECTO_ID = 8; // Usamos el ID de Esteban como default
 const TIPO_CONTACTO_MAP = { '1': 1, '2': 2 }; 
 const ORIGEN_CONTACTO_MAP = {
-  '1': 6, '2': 1, '3': 2, '4': 8, '5': 7, '6': 3, '7': 5, '8': 9, '9': 11, '10': 10, '11': 12
+  '1': 6,   // Inmobiliaria
+  '2': 1,   // Facebook (Personal)
+  '3': 9,   // Instagram (Personal)  (antes opción 8)
+  '4': 2,   // Carteleria (Celu inmobiliaria)
+  '5': 8,   // Pagina Web
+  '6': 3,   // 0810
+  '7': 5,   // Referido
+  '8': 11,  // Instagram (Inmobiliaria) (antes opción 9)
+  '9': 10,  // Publicador externo
+  '10': 12  // Cliente Antiguo
 };
 
 const PRECIO_RANGOS_MAP = {
