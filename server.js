@@ -517,6 +517,29 @@ async function sendMainMenu(to) {
 }
 
 async function sendOriginList(to) {
+  const rows = [
+    { id: "origin_1",  title: "Inmobiliaria" },
+    { id: "origin_2",  title: "Facebook" },
+    { id: "origin_3",  title: "Cartelería" },
+    { id: "origin_4",  title: "Página Web" },
+    { id: "origin_5",  title: "Showroom" },
+    { id: "origin_6",  title: "0810" },
+    { id: "origin_7",  title: "Referido" },
+    { id: "origin_8",  title: "Instagram (Personal)" },
+    { id: "origin_9",  title: "Instagram (Inmobiliaria)" },
+    { id: "origin_10", title: "Publicador externo" },
+    { id: "origin_11", title: "Cliente antiguo" }
+  ];
+
+  // WhatsApp permite máx. 10 filas por sección -> las partimos en bloques de 10
+  const sections = [];
+  for (let i = 0; i < rows.length; i += 10) {
+    sections.push({
+      title: i === 0 ? "Orígenes (1–10)" : "Más opciones",
+      rows: rows.slice(i, i + 10)
+    });
+  }
+
   await sendMessage(to, {
     type: "interactive",
     interactive: {
@@ -524,22 +547,7 @@ async function sendOriginList(to) {
       body: { text: "🧭 Elegí el *origen del contacto*:" },
       action: {
         button: "Elegir origen",
-        sections: [{
-          title: "Orígenes",
-          rows: [
-            { id: "origin_1",  title: "Inmobiliaria" },
-            { id: "origin_2",  title: "Facebook" },
-            { id: "origin_3",  title: "Cartelería" },
-            { id: "origin_4",  title: "Página Web" },
-            { id: "origin_5",  title: "Showroom" },
-            { id: "origin_6",  title: "0810" },
-            { id: "origin_7",  title: "Referido" },
-            { id: "origin_8",  title: "Instagram (Personal)" },
-            { id: "origin_9",  title: "Instagram (Inmobiliaria)" },
-            { id: "origin_10", title: "Publicador externo" },
-            { id: "origin_11", title: "Cliente antiguo" }
-          ]
-        }]
+        sections
       }
     }
   });
