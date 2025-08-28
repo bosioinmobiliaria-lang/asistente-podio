@@ -935,18 +935,25 @@ app.post("/whatsapp", async (req, res) => {
 
                 // ===== 1) Verificar teléfono en Leads =====
                 case "awaiting_phone_to_check": {
+    console.log("==> PASO 1: Entrando al flujo 'awaiting_phone_to_check'.");
     const phoneToCheck = input.replace(/\D/g, "");
+
+    // 1. MEJORA DEL MENSAJE DE ERROR
     if (phoneToCheck.length < 9) {
-        await sendMessage(from, { type: 'text', text: { body: "El número parece muy corto. Intenta de nuevo." } });
+        console.log("==> ERROR: El número es muy corto o inválido.");
+        const responseText = "❌ El número no parece correcto. Por favor, envíalo de nuevo sin el 0 ni el 15.";
+        await sendMessage(from, { type: 'text', text: { body: responseText } });
         break;
     }
 
+    console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
     const existingLeads = await searchLeadByPhone(phoneToCheck);
+    console.log(`==> PASO 3: Búsqueda en Podio finalizada. Se encontraron ${existingLeads.length} leads.`);
 
     if (existingLeads.length > 0) {
         // --- SI ENCUENTRA EL LEAD ---
+        console.log("==> PASO 4: Lead encontrado. Enviando resumen.");
         const lead = existingLeads[0];
-        // (Aquí va toda la lógica para construir el resumen del lead)
         const leadTitleField = lead.fields.find(f => f.external_id === "contacto-2");
         const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : "Sin nombre";
         const assignedField = lead.fields.find(f => f.external_id === "vendedor-asignado-2");
@@ -961,6 +968,7 @@ app.post("/whatsapp", async (req, res) => {
 
     } else {
         // --- NO ENCUENTRA EL LEAD ---
+        console.log("==> PASO 4: Lead no encontrado. Ofreciendo crear contacto.");
         currentState.step = "awaiting_creation_confirmation";
         currentState.data = {
             phone: [{ type: "mobile", value: phoneToCheck }],
@@ -980,6 +988,7 @@ app.post("/whatsapp", async (req, res) => {
             }
         });
     }
+    console.log("==> PASO 5: Flujo 'awaiting_phone_to_check' completado.");
     break;
 }
 
