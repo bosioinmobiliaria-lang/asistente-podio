@@ -861,6 +861,53 @@ async function createItemIn(appName, fields) {
   return data;
 }
 
+async function attachMetaAudioToPodio(leadItemId, mediaId) {
+  const API_VERSION = 'v19.0';
+  try {
+    // 1) Pedir URL temporal del media a Meta
+    const metaRes = await axios.get(`https://graph.facebook.com/${API_VERSION}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
+      timeout: 20000,
+    });
+    const mediaUrl = metaRes.data?.url;
+    if (!mediaUrl) throw new Error('no_media_url');
+
+    // 2) Descargar binario del audio
+    const audioRes = await axios.get(mediaUrl, {
+      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
+      responseType: "arraybuffer",
+      timeout: 30000,
+    });
+    const buf = Buffer.from(audioRes.data);
+    const contentType = audioRes.headers["content-type"] || "audio/ogg";
+
+    // 3) Subir a Podio /file
+    const token = await getAppAccessTokenFor("leads");
+    const form = new FormData();
+    form.append("source", "whatsapp");
+    form.append("file", buf, { filename: "whatsapp-voice.ogg", contentType });
+
+    const up = await axios.post("https://api.podio.com/file/", form, {
+      headers: { Authorization: `OAuth2 ${token}`, ...form.getHeaders() },
+      timeout: 60000,
+    });
+    const fileId = up.data?.file_id;
+    if (!fileId) throw new Error("no_file_id");
+
+    // 4) Adjuntar el archivo al item (lead)
+    await axios.post(`https://api.podio.com/file/${fileId}/attach`, null, {
+      params: { ref_type: "item", ref_id: leadItemId },
+      headers: { Authorization: `OAuth2 ${token}` },
+      timeout: 20000,
+    });
+
+    return { ok: true, fileId };
+  } catch (err) {
+    console.error("attachMetaAudioToPodio error:", err.response?.data || err.message);
+    return { ok: false, error: err.response?.data || err.message };
+  }
+}
+
 async function getAppMeta(appId, which = "contactos") {
   const token = await getAppAccessTokenFor(which);
   const { data } = await axios.get(`https://api.podio.com/app/${appId}`, {
@@ -1231,11 +1278,17 @@ if (message.type === 'text') {
     const mediaId = message.audio.id;
     const { text: asrText } = await transcribeAudioFromMeta(mediaId);
     userInput = (asrText || "").trim();
+
+    // 👉 NUEVO: recordamos el audio para adjuntarlo luego al lead
+    if (userStates[numeroRemitente]) {
+      userStates[numeroRemitente].lastAudioMediaId = mediaId;
+    }
   } catch (e) {
     console.error("ASR fail:", e);
     userInput = "";
   }
 }
+
 
 const input = interactiveReplyId || userInput;
 
@@ -1712,23 +1765,31 @@ case "awaiting_newconv_text": {
   await sendMessage(from, { type: 'text', text: { body: "🎙️ Analizando... Dame un momento para resumir y guardar en Podio." } });
 
   const resumen = await summarizeWithOpenAI(raw);
-  
-  // LOG 2: Ver el resultado del resumen
-  console.log("[DIAGNÓSTICO] Resultado del resumen de OpenAI:", resumen);
+const result = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
+if (result?.ok) {
+  await sendMessage(from, { type: 'text', text: { body: "✅ ¡Listo! Guardé el resumen en el seguimiento del lead." } });
+} else {
+  console.log("[DIAGNÓSTICO] Falló el resumen. Intentando guardar transcripción cruda en Podio.");
+  await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
+  await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé la transcripción completa para que no se pierda la info." } });
+}
 
-  const result = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
-
-  if (result?.ok) {
-    await sendMessage(from, { type: 'text', text: { body: "✅ ¡Listo! El resumen fue guardado en el seguimiento del lead." } });
+// 👉 NUEVO: si la conversación vino por audio, lo adjuntamos al lead
+if (currentState.lastAudioMediaId) {
+  const attach = await attachMetaAudioToPodio(leadId, currentState.lastAudioMediaId);
+  if (attach.ok) {
+    await appendToLeadSeguimiento(leadId, "🎧 Audio de WhatsApp adjuntado al lead.");
+    await sendMessage(from, { type: 'text', text: { body: "🎧 También adjunté el audio al lead." } });
   } else {
-    // LOG 3: Ver qué se intentará guardar como fallback
-    console.log("[DIAGNÓSTICO] Falló el resumen. Intentando guardar transcripción cruda en Podio.");
-    await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
-    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude generar el resumen, pero guardé la transcripción completa para que no se pierda la información." } });
+    console.error("No se pudo adjuntar el audio:", attach.error);
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé el texto, pero no pude adjuntar el audio." } });
   }
+  delete currentState.lastAudioMediaId;
+}
 
-  currentState.step = "update_lead_menu";
-  const leadItem = await getLeadDetails(leadId);
+currentState.step = "update_lead_menu";
+const leadItem = await getLeadDetails(leadId);
+
   const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
   const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
   await sendLeadUpdateMenu(from, leadName);
