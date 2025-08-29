@@ -1534,17 +1534,6 @@ app.post('/whatsapp', async (req, res) => {
     // const twiml = new MessagingResponse();
     // let respuesta = "";
 
-    // Menú general (para todos) - Ahora es una función para enviar el menú
-    async function sendMenuGeneral() {
-      const menuText =
-        'Hola 👋.\n\n' +
-        '*1.* ✅ Verificar Teléfono en Leads\n' +
-        '*2.* 🔎 Buscar una propiedad\n' +
-        '*3.* ✏️ Actualizar un LEADS\n\n' +
-        'Escribí *cancelar* para volver.';
-      await sendMessage(from, { type: 'text', text: { body: menuText } });
-    }
-
     // Cancelar y volver al menú
     const low = (input || '').toLowerCase(); // ← evita crash si input es undefined
     if (low === 'cancelar' || low === 'volver') {
@@ -2007,33 +1996,6 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // NO hay Lead con ese teléfono → buscar Contacto para linkear
-          const contacts = await searchContactByPhone(raw);
-
-          if (contacts?.length) {
-            const contact = contacts[0];
-            const cName = contact.title || 'Contacto sin nombre';
-            currentState.step = 'awaiting_create_lead_confirm';
-            currentState.tempPhoneDigits = raw;
-            currentState.contactItemId = contact.item_id;
-
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                header: { type: 'text', text: `✅ Contacto encontrado: ${cName}` },
-                body: { text: 'No hay un Lead asociado. ¿Querés crear uno y vincularlo?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'create_lead_yes', title: '✅ Crear Lead' } },
-                    { type: 'reply', reply: { id: 'create_lead_no', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-            break;
-          }
-
           // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
@@ -2340,9 +2302,9 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'create_lead_presupuesto': {
-          const id = PRESUP_MAP[input];
+          const id = PRESUPUESTO_MAP[input];
           if (!id) {
-            await sendPresupuestoList(from);
+            await sendQueBuscaList(from);
             break;
           }
           currentState.newLead['presupuesto-2'] = [id];
@@ -2463,7 +2425,7 @@ app.post('/whatsapp', async (req, res) => {
         // ------- fallback -------
         default: {
           delete userStates[numeroRemitente];
-          await sendMenuGeneral();
+          await sendMainMenu(from);
           break;
         }
       } // end switch con estado
