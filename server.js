@@ -318,10 +318,62 @@ async function summarizeWithOpenAI(text) {
 
 // --- Transcripción de audio WhatsApp (Adaptada para Meta) ---
 async function transcribeAudioFromMeta(mediaId) {
-  // TODO: Esta función requiere una implementación futura.
-  // El proceso es: 1) Usar mediaId para obtener una media_url. 2) Descargar el audio de esa URL usando el Access Token. 3) Enviar el audio a OpenAI.
-  console.log(`Función de transcripción para mediaId ${mediaId} no implementada.`);
-  return { text: null, error: "not_implemented" };
+  try {
+    const API_VERSION = 'v19.0';
+    const token = process.env.META_ACCESS_TOKEN;
+
+    // 1) Obtener URL del media en Meta
+    const metaInfo = await axios.get(
+      `https://graph.facebook.com/${API_VERSION}/${mediaId}`,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 }
+    );
+    const fileUrl = metaInfo.data?.url;
+    const mime = metaInfo.data?.mime_type || "audio/ogg";
+
+    if (!fileUrl) return { text: null, error: "no_media_url" };
+
+    // 2) Descargar binario del audio (requiere el mismo token)
+    const audioResp = await axios.get(fileUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      responseType: "arraybuffer",
+      timeout: 60000
+    });
+    const audioBuffer = Buffer.from(audioResp.data);
+
+    // Helper simple para extensión desde mime
+    const ext = (() => {
+      if (mime.includes("ogg")) return "ogg";
+      if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+      if (mime.includes("aac")) return "aac";
+      if (mime.includes("m4a")) return "m4a";
+      if (mime.includes("wav")) return "wav";
+      return "ogg";
+    })();
+
+    // 3) Enviar a OpenAI (transcripción)
+    const fd = new FormData();
+    fd.append("file", audioBuffer, { filename: `audio.${ext}`, contentType: mime });
+    // Usar gpt-4o-transcribe; si tu cuenta no lo tiene habilitado, cambia a "whisper-1"
+    fd.append("model", "gpt-4o-transcribe");
+
+    const { data } = await axios.post(
+      "https://api.openai.com/v1/audio/transcriptions",
+      fd,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          ...fd.getHeaders()
+        },
+        timeout: 120000
+      }
+    );
+
+    const text = (data?.text || "").trim();
+    return { text, error: null };
+  } catch (e) {
+    console.error("Transcribe error:", e?.response?.data || e.message);
+    return { text: null, error: e?.response?.data || e.message };
+  }
 }
 
 /** Resumen compacto del Lead para WhatsApp (incluye último seguimiento limpio) */
@@ -1149,22 +1201,33 @@ app.post("/whatsapp", async (req, res) => {
         let currentState = userStates[numeroRemitente];
 
         // --- INICIO DEL BLOQUE CORREGIDO ---
-        let userInput = '';
-        let interactiveReplyId = null;
+let userInput = '';
+let interactiveReplyId = null;
 
-        if (message.type === 'text') {
-            userInput = message.text.body.trim();
-        } else if (message.type === 'interactive') {
-            const interactive = message.interactive;
-            if (interactive.type === 'button_reply') {
-                interactiveReplyId = interactive.button_reply.id;
-            } else if (interactive.type === 'list_reply') {
-                // Lo dejamos preparado para futuros menús de lista
-                interactiveReplyId = interactive.list_reply.id;
-            }
-        }
-        
-        const input = interactiveReplyId || userInput;
+if (message.type === 'text') {
+  userInput = (message.text?.body || "").trim();
+
+} else if (message.type === 'interactive') {
+  const interactive = message.interactive;
+  if (interactive?.type === 'button_reply') {
+    interactiveReplyId = interactive.button_reply.id;
+  } else if (interactive?.type === 'list_reply') {
+    interactiveReplyId = interactive.list_reply.id;
+  }
+
+} else if (message.type === 'audio') {
+  try {
+    const mediaId = message.audio.id;
+    const { text: asrText } = await transcribeAudioFromMeta(mediaId);
+    userInput = (asrText || "").trim();
+  } catch (e) {
+    console.error("ASR fail:", e);
+    userInput = "";
+  }
+}
+
+const input = interactiveReplyId || userInput;
+
 
         // CAMBIO 3: La variable "respuesta" se elimina. Cada respuesta se envía directamente.
         // const twiml = new MessagingResponse();
@@ -1172,13 +1235,14 @@ app.post("/whatsapp", async (req, res) => {
 
         // Menú general (para todos) - Ahora es una función para enviar el menú
         async function sendMenuGeneral() {
-            const menuText = "Hola 👋.\n\n" +
-                "*1.* ✅ Verificar Teléfono en Leads\n" +
-                "*2.* 🔎 Buscar una propiedad\n" +
-                "*3.* ✏️ Actualizar un LEADS\n\n" +
-                "Escribe *cancelar* para volver.";
-            await sendMessage(from, { type: 'text', text: { body: menuText } });
-        }
+  const menuText = "Hola 👋.\n\n" +
+    "*1.* ✅ Verificar Teléfono en Leads\n" +
+    "*2.* 🔎 Buscar una propiedad\n" +
+    "*3.* ✏️ Actualizar un LEADS\n\n" +
+    "Escribí *cancelar* para volver.";
+  await sendMessage(from, { type: 'text', text: { body: menuText } });
+}
+
 
         // Cancelar y volver al menú
             const low = (input || "").toLowerCase(); // ← evita crash si input es undefined
@@ -1249,22 +1313,6 @@ case "awaiting_contact_type": {
                 case "awaiting_phone_to_check": {
     console.log("==> PASO 1: Entrando al flujo 'awaiting_phone_to_check'.");
     const phoneToCheck = input.replace(/\D/g, "");
-
-    // 1. MEJORA DEL MENSAJE DE ERROR
-        if (!items || !items.length) {
-            currentState.step = "awaiting_price_retry";
-            currentState.priceLevel = "main";
-            await sendMessage(from, {
-                type: "interactive",
-                interactive: {
-                    type: "button",
-                    body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
-                    action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
-                }
-            });
-            break;
-          }
-
 
     console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
     const existingLeads = await searchLeadByPhone(phoneToCheck);
@@ -1625,7 +1673,7 @@ case "update_lead_menu": {
     await sendLeadUpdateMenu(from, leadName);
   } else if (id === "update_newconv") {
     currentState.step = "awaiting_newconv_text";
-    await sendMessage(from, { type: 'text', text: { body: "✍️ Escribí un *resumen corto* de la conversación (1–2 frases)." } });
+    await sendMessage(from, { type: 'text', text: { body: "🗣️ Mandá *texto o audio* con un *resumen corto* (1–2 frases)." } });
   } else if (id === "update_visit") {
     currentState.step = "awaiting_visit_date";
     await sendMessage(from, { type: 'text', text: { body: "📅 Decime la *fecha* de la visita (AAAA-MM-DD). Podés agregar hora HH:MM." } });
@@ -1639,10 +1687,10 @@ case "awaiting_newconv_text": {
   const leadId = currentState.leadItemId;
   const raw = (input || "").trim();
   if (!raw) {
-    await sendMessage(from, { type: 'text', text: { body: "🤏 Necesito un texto. Probá de nuevo o escribí *cancelar*." } });
+    await sendMessage(from, { type: 'text', text: { body: "🤏 No escuché/entendí. Mandá *texto o audio* con el resumen, o escribí *cancelar*." } });
     break;
   }
-  const resumen = await summarizeWithOpenAI(raw);
+  const resumen = await summarizeWithOpenAI(raw); // ya lo tenés implementado
   const ok = await appendToLeadSeguimiento(leadId, `Nueva conversación: ${resumen}`);
   if (ok?.ok) {
     await sendMessage(from, { type: 'text', text: { body: "✅ Guardado en seguimiento." } });
