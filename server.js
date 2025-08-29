@@ -312,9 +312,9 @@ async function summarizeWithOpenAI(text) {
         model: "gpt-4o-mini",
         temperature: 0.2,
         messages: [
-          { role: "system", content: "Resume en español la conversación del cliente inmobiliario en 1–3 oraciones claras y puntuales." },
-          { role: "user", content: raw }
-        ]
+  { role: "system", content: "Sos un asistente para inmobiliaria. Si te paso texto transcrito de un audio, devolvé un resumen BREVE (1–2 oraciones) con: intención, zona/propiedad, presupuesto/tiempo y próxima acción. Sin encabezados ni relleno." },
+  { role: "user", content: raw }
+]
       },
       { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, timeout: 60000 }
     );
@@ -1227,6 +1227,7 @@ let currentState = userStates[numeroRemitente];
 
 if (message.type === 'text') {
   userInput = (message.text?.body || "").trim();
+  if (userStates[numeroRemitente]) userStates[numeroRemitente].lastInputType = 'text';
 
 } else if (message.type === 'interactive') {
   const interactive = message.interactive;
@@ -1240,7 +1241,8 @@ if (message.type === 'text') {
   try {
     const mediaId = message.audio.id;
     const { text: asrText } = await transcribeAudioFromMeta(mediaId);
-    userInput = (asrText || "").trim();   // ✅ solo transcribimos
+    userInput = (asrText || "").trim();
+    if (userStates[numeroRemitente]) userStates[numeroRemitente].lastInputType = 'audio';
   } catch (e) {
     console.error("ASR fail:", e);
     userInput = "";
@@ -1711,50 +1713,54 @@ case "update_lead_menu": {
 case "awaiting_newconv_text": {
   const leadId = currentState.leadItemId;
   const raw = (input || "").trim();
-  
-  // LOG 1: Ver qué texto se recibió (transcrito o escrito)
+  const kind = currentState.lastInputType || 'text'; // 'text' o 'audio'
+
   console.log("[DIAGNÓSTICO] Texto recibido para procesar:", raw);
 
   if (!raw) {
-    await sendMessage(from, { type: 'text', text: { body: "🤏 No entendí o el audio estaba vacío. Por favor, enviá de nuevo el seguimiento en *texto o audio*, o escribí *cancelar*." } });
+    await sendMessage(from, { type: 'text', text: { body: "🤏 No entendí o el audio estaba vacío. Enviá de nuevo el seguimiento en *texto o audio*, o escribí *cancelar*." } });
     break;
   }
 
-  await sendMessage(from, { type: 'text', text: { body: "🎙️ Analizando... Dame un momento para resumir y guardar en Podio." } });
+  // Mensaje de estado acorde
+  await sendMessage(from, {
+    type: 'text',
+    text: { body: kind === 'audio'
+      ? "🎙️ Analizando... Dame un momento para resumir y guardar en Podio."
+      : "📝 Guardando tu mensaje en Podio..." }
+  });
 
-const resumen = await summarizeWithOpenAI(raw);
-const r1 = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
+  // Si es audio, resumimos corto; si es texto, guardamos tal cual
+  let toSave = raw;
+  if (kind === 'audio') {
+    try {
+      const resumen = await summarizeWithOpenAI(raw);
+      if (resumen && resumen.trim()) toSave = resumen.trim();
+    } catch (e) {
+      console.error("[Seguimiento] Error generando resumen:", e.message);
+      // si falla el resumen, queda el texto transcripto
+    }
+  }
 
-if (!r1.ok) {
-  console.error("[Seguimiento] Error guardando RESUMEN:", r1.error);
-  const r2 = await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
-
-  if (!r2.ok) {
-    console.error("[Seguimiento] Error guardando TRANSCRIPCIÓN:", r2.error);
+  const r = await appendToLeadSeguimiento(leadId, toSave);
+  if (!r.ok) {
+    console.error("[Seguimiento] Error guardando:", r.error);
     await sendMessage(from, { type: 'text', text: { body: "❌ No pude guardar en Podio. Avisá al administrador." } });
   } else {
-    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude resumir, pero guardé la transcripción completa." } });
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: kind === 'audio'
+        ? "✅ Guardé el resumen en el seguimiento del lead."
+        : "✅ Guardé tu mensaje en el seguimiento del lead." }
+    });
   }
-} else {
-  await sendMessage(from, { type: 'text', text: { body: "✅ Guardé el resumen en el seguimiento del lead." } });
-}
 
-// 👉 NUEVO: si la conversación vino por audio, lo adjuntamos al lead
-if (currentState.lastAudioMediaId) {
-  const attach = await attachMetaAudioToPodio(leadId, currentState.lastAudioMediaId);
-  if (attach.ok) {
-    await appendToLeadSeguimiento(leadId, "🎧 Audio de WhatsApp adjuntado al lead.");
-    await sendMessage(from, { type: 'text', text: { body: "🎧 También adjunté el audio al lead." } });
-  } else {
-    console.error("No se pudo adjuntar el audio:", attach.error);
-    await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé el texto, pero no pude adjuntar el audio." } });
-  }
-  delete currentState.lastAudioMediaId;
-}
+  // limpiar flag de tipo de entrada
+  delete currentState.lastInputType;
 
-currentState.step = "update_lead_menu";
-const leadItem = await getLeadDetails(leadId);
-
+  // Volver a la botonera del lead
+  currentState.step = "update_lead_menu";
+  const leadItem = await getLeadDetails(leadId);
   const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
   const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
   await sendLeadUpdateMenu(from, leadName);
