@@ -2149,6 +2149,87 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
+        case 'update_lead_start': {
+          // El usuario responde con el celular (o un item_id)
+          const raw = (input || '').replace(/\D/g, '');
+
+          if (!raw) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '📱 Mandame el *celular* (10 dígitos, sin 0/15) o el *ID* del lead.' },
+            });
+            break;
+          }
+
+          // 1) Intentar encontrar el Lead por teléfono o por ID
+          const found = await findLeadByPhoneOrId(raw);
+          if (found.ok && found.leadItem) {
+            const leadItem = found.leadItem;
+            currentState.leadItemId = leadItem.item_id;
+            currentState.step = 'update_lead_menu';
+
+            const nameField = (leadItem.fields || []).find(f => f.external_id === 'contacto-2');
+            const leadName = nameField
+              ? nameField.values?.[0]?.value?.title || 'Sin nombre'
+              : 'Sin nombre';
+
+            await sendLeadUpdateMenu(from, leadName); // ✅ “Lead encontrado: … ¿Qué querés hacer?”
+            break;
+          }
+
+          // 2) No hay Lead → buscar Contacto para linkear
+          const contacts = await searchContactByPhone(raw);
+
+          if (contacts?.length) {
+            const contact = contacts[0];
+            const cName = contact.title || 'Contacto sin nombre';
+
+            currentState.step = 'awaiting_create_lead_confirm';
+            currentState.tempPhoneDigits = raw;
+            currentState.contactItemId = contact.item_id;
+
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                header: { type: 'text', text: `✅ Contacto encontrado: ${cName}` },
+                body: { text: 'No hay un Lead asociado. ¿Querés crear uno y vincularlo?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'create_lead_yes', title: '✅ Crear Lead' } },
+                    { type: 'reply', reply: { id: 'create_lead_no', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          // 3) Tampoco hay Contacto → ofrecer crear Contacto
+          currentState.step = 'awaiting_creation_confirmation';
+          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
+
+          await sendMessage(from, {
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: {
+                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
+              },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
+          break;
+        }
+
         case 'update_lead_menu': {
           const id = input;
           const leadId = currentState.leadItemId;
