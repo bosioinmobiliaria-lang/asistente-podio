@@ -840,13 +840,13 @@ async function sendInquietudList(to) {
           {
             title: 'Inquietud',
             rows: [
-              { id: 'inq_1', title: 'Inversión' },
-              { id: 'inq_10', title: 'Capitalización' },
-              { id: 'inq_2', title: 'Mudanza' },
-              { id: 'inq_4', title: 'Crédito hipotecario' },
-              { id: 'inq_8', title: 'Para vacacionar' },
-              { id: 'inq_6', title: 'Herencia' },
-              { id: 'inq_9', title: 'Trabajo' },
+              { id: 'inq_1', title: '🪙 Inversión' },
+              { id: 'inq_2', title: '📈 Capitalización' },
+              { id: 'inq_3', title: '📦 Mudanza' },
+              { id: 'inq_4', title: '🏦 Crédito hipotecario' },
+              { id: 'inq_5', title: '🏖️ Para vacacionar' },
+              { id: 'inq_6', title: '🧬 Herencia' },
+              { id: 'inq_7', title: '💼 Trabajo' },
             ],
           },
         ],
@@ -856,27 +856,48 @@ async function sendInquietudList(to) {
 }
 
 async function sendPresupuestoList(to) {
+  // 9 filas + "Más opciones" (cumple límite 10)
   await sendMessage(to, {
     type: 'interactive',
     interactive: {
       type: 'list',
-      body: { text: '💸 Elegí el *presupuesto*:' },
+      body: { text: '💸 Elegí *presupuesto*:' },
       action: {
         button: 'Elegir',
         sections: [
           {
             title: 'Presupuesto',
             rows: [
-              { id: 'pre_1', title: 'Hasta U$S 10.000' },
-              { id: 'pre_2', title: 'U$S 10.000 a 20.000' },
-              { id: 'pre_3', title: 'U$S 20.000 a 40.000' },
-              { id: 'pre_4', title: 'U$S 40.000 a 60.000' },
-              { id: 'pre_5', title: 'U$S 60.000 a 80.000' },
-              { id: 'pre_6', title: 'U$S 80.000 a 100.000' },
-              { id: 'pre_7', title: 'U$S 100.000 a 150.000' },
-              { id: 'pre_8', title: 'U$S 150.000 a 200.000' },
-              { id: 'pre_9', title: 'U$S 200.000 a 300.000' },
-              { id: 'pre_10', title: 'U$S 300.000 a 500.000' },
+              { id: 'pre_1', title: '≤ U$S 10.000' },
+              { id: 'pre_2', title: 'U$S 10.000–20.000' },
+              { id: 'pre_3', title: 'U$S 20.000–40.000' },
+              { id: 'pre_4', title: 'U$S 40.000–60.000' },
+              { id: 'pre_5', title: 'U$S 60.000–80.000' },
+              { id: 'pre_6', title: 'U$S 80.000–100.000' },
+              { id: 'pre_7', title: 'U$S 100.000–150.000' },
+              { id: 'pre_8', title: 'U$S 150.000–200.000' },
+              { id: 'pre_more', title: '➡️ Más opciones…' },
+            ],
+          },
+        ],
+      },
+    },
+  });
+}
+
+async function sendPresupuestoHighList(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: '💸 Rango alto:' },
+      action: {
+        button: 'Elegir',
+        sections: [
+          {
+            title: 'Presupuesto (alto)',
+            rows: [
+              { id: 'pre_10', title: 'U$S 200.000–300.000' },
               { id: 'pre_11', title: 'Más de U$S 500.000' },
             ],
           },
@@ -886,23 +907,23 @@ async function sendPresupuestoList(to) {
   });
 }
 
-async function sendBuscaList(to) {
+async function sendQueBuscaList(to) {
   await sendMessage(to, {
     type: 'interactive',
     interactive: {
       type: 'list',
-      body: { text: '🏠 ¿Qué *busca*?' },
+      body: { text: '🔎 ¿Qué *busca*?' },
       action: {
         button: 'Elegir',
         sections: [
           {
-            title: 'Tipo',
+            title: 'Busco',
             rows: [
-              { id: 'bus_1', title: 'Casa' },
-              { id: 'bus_2', title: 'Lote' },
-              { id: 'bus_4', title: 'Casa en construcción' },
-              { id: 'bus_3', title: 'Cabañas' },
-              { id: 'bus_5', title: 'Monoambiente' },
+              { id: 'qb_1', title: '🏠 Casa' },
+              { id: 'qb_2', title: '🏡 Lote' },
+              { id: 'qb_4', title: '🏗️ Casa en construcción' },
+              { id: 'qb_3', title: '🏕️ Cabañas' },
+              { id: 'qb_5', title: '🏢 Monoambiente' },
             ],
           },
         ],
@@ -916,20 +937,20 @@ async function sendExpectativaList(to) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      body: { text: '⏱️ *Expectativa de cierre*:' },
+      body: { text: '⏳ *Expectativa de cierre*:' },
       action: {
         button: 'Elegir',
         sections: [
           {
             title: 'Cierre',
             rows: [
-              { id: 'exp_1', title: 'Lo antes posible' },
-              { id: 'exp_2', title: '1 Mes' },
-              { id: 'exp_3', title: '2 Meses' },
-              { id: 'exp_4', title: '3 Meses' },
-              { id: 'exp_6', title: '+ de 6 meses' },
-              { id: 'exp_8', title: 'Indefinido' },
-              { id: 'exp_9', title: 'Tiene que vender una propiedad' },
+              { id: 'exp_1', title: '⚡ Lo antes posible' },
+              { id: 'exp_2', title: '🗓️ 1 mes' },
+              { id: 'exp_3', title: '🗓️ 2 meses' },
+              { id: 'exp_4', title: '🗓️ 3 meses' },
+              { id: 'exp_6', title: '🗓️ + de 6 meses' },
+              { id: 'exp_8', title: '🌫️ Indefinido' },
+              { id: 'exp_9', title: '🏡 Debe vender una propiedad' },
             ],
           },
         ],
@@ -1102,6 +1123,36 @@ async function searchLeadByPhone(phoneNumber) {
     return response.data.items;
   } catch (err) {
     console.error('Error al buscar lead en Podio:', err.response ? err.response.data : err.message);
+    return [];
+  }
+}
+
+// --- Contactos: buscar por teléfono ---
+// Intenta por 'telefono-busqueda' (texto). Fallback: por campo phone (tipo phone).
+async function searchContactByPhone(phoneDigits) {
+  const appId = process.env.PODIO_CONTACTOS_APP_ID;
+  const token = await getAppAccessTokenFor('contactos');
+
+  // 1) por texto 'telefono-busqueda' (si existe en tu app de Contactos)
+  try {
+    const r1 = await axios.post(
+      `https://api.podio.com/item/app/${appId}/filter/`,
+      { filters: { 'telefono-busqueda': phoneDigits } },
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 },
+    );
+    if (r1.data?.items?.length) return r1.data.items;
+  } catch (_) {} // sigue al fallback
+
+  // 2) fallback por campo 'phone' (tipo phone)
+  try {
+    const r2 = await axios.post(
+      `https://api.podio.com/item/app/${appId}/filter/`,
+      { filters: { phone: [{ value: phoneDigits }] } },
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 },
+    );
+    return r2.data.items || [];
+  } catch (err) {
+    console.error('Error buscando contacto por teléfono:', err.response?.data || err.message);
     return [];
   }
 }
@@ -1347,38 +1398,26 @@ const ORIGEN_CONTACTO_MAP = {
 };
 
 // ====== Opciones Podio para crear Lead (IDs reales de tus capturas) ======
-const INQUIETUD_MAP = { // external_id: "lead-status"
-  inq_1: 1,    // Inversión
-  inq_10: 10,  // Capitalización
-  inq_2: 2,    // Mudanza
-  inq_4: 4,    // Crédito hipotecario
-  inq_8: 8,    // Para vacacionar
-  inq_6: 6,    // Herencia
-  inq_9: 9,    // Trabajo
+// === Opciones de Podio (IDs exactos de tus capturas) ===
+const INQUIETUD_MAP = { inq_1: 1, inq_2: 10, inq_3: 2, inq_4: 4, inq_5: 8, inq_6: 6, inq_7: 9 };
+
+const PRESUPUESTO_MAP = {
+  pre_1: 1,
+  pre_2: 2,
+  pre_3: 3,
+  pre_4: 4,
+  pre_5: 5,
+  pre_6: 6,
+  pre_7: 7,
+  pre_8: 8,
+  pre_9: 9,
+  pre_10: 10,
+  pre_11: 11,
 };
 
-const PRESUP_MAP = { // external_id: "presupuesto-2"
-  pre_1: 1, pre_2: 2, pre_3: 3, pre_4: 4, pre_5: 5, pre_6: 6,
-  pre_7: 7, pre_8: 8, pre_9: 9, pre_10: 10, pre_11: 11,
-};
+const BUSCA_MAP = { qb_1: 1, qb_2: 2, qb_4: 4, qb_3: 3, qb_5: 5 };
 
-const BUSCA_MAP = { // external_id: "busca"
-  bus_1: 1,  // Casa
-  bus_2: 2,  // Lote
-  bus_4: 4,  // Casa en construcción
-  bus_3: 3,  // Cabañas
-  bus_5: 5,  // Monoambiente
-};
-
-const EXPECTATIVA_MAP = { // external_id: "ideal-time-frame-of-sale"
-  exp_1: 1,  // Lo antes posible
-  exp_2: 2,  // 1 Mes
-  exp_3: 3,  // 2 Meses
-  exp_4: 4,  // 3 Meses
-  exp_6: 6,  // + de 6 meses
-  exp_8: 8,  // Indefinido
-  exp_9: 9,  // Tiene que vender una propiedad
-};
+const EXPECTATIVA_MAP = { exp_1: 1, exp_2: 2, exp_3: 3, exp_4: 4, exp_6: 6, exp_8: 8, exp_9: 9 };
 
 // --- Rangos de precio (lista principal de 10) ---
 const PRICE_RANGES_10 = {
@@ -1936,76 +1975,215 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry': {
-          if (input === 'price_retry_main') {
-            // Siempre mostramos el menú PRINCIPAL de rangos
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
-          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
-            break; // ← no menú
-          } else {
-            // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+        case 'awaiting_price_retry':
+          {
+            if (input === 'price_retry_main') {
+              // Siempre mostramos el menú PRINCIPAL de rangos
+              currentState.step = 'awaiting_price_range';
+              await sendPriceRangeList(from);
+            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+              delete userStates[numeroRemitente];
+              await sendFarewell(from);
+              break; // ← no menú
+            } else {
+              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
+                },
+              });
+            }
+            break;
+          }
+
+          // NO hay Lead con ese teléfono → buscar Contacto para linkear
+          const contacts = await searchContactByPhone(raw);
+
+          if (contacts?.length) {
+            const contact = contacts[0];
+            const cName = contact.title || 'Contacto sin nombre';
+            currentState.step = 'awaiting_create_lead_confirm';
+            currentState.tempPhoneDigits = raw;
+            currentState.contactItemId = contact.item_id;
+
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                header: { type: 'text', text: `✅ Contacto encontrado: ${cName}` },
+                body: { text: 'No hay un Lead asociado. ¿Querés crear uno y vincularlo?' },
                 action: {
                   buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                    },
-                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    { type: 'reply', reply: { id: 'create_lead_yes', title: '✅ Crear Lead' } },
+                    { type: 'reply', reply: { id: 'create_lead_no', title: '❌ Cancelar' } },
                   ],
                 },
               },
+            });
+            break;
+          }
+
+          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
+          currentState.step = 'awaiting_creation_confirmation';
+          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
+          await sendMessage(from, {
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: {
+                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
+              },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
+          break;
+
+        case 'awaiting_create_lead_confirm': {
+          if (input === 'create_lead_yes') {
+            // inicia wizard
+            currentState.step = 'awaiting_inquietud';
+            currentState.leadDraft = {};
+            await sendInquietudList(from);
+          } else if (input === 'create_lead_no' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+          } else {
+            // re-mostrar botones
+            const name = currentState.contactItemId ? 'Contacto' : '';
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: 'Tocá un botón para continuar. ✅ / ❌' },
             });
           }
           break;
         }
 
-        case 'update_lead_start': {
-          const raw = (input || '').replace(/\D/g, '');
-          if (!isValidArMobile(raw)) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '🙈 Número inválido. Mandá *10 dígitos* (sin 0/15).' },
-            });
+        case 'awaiting_inquietud': {
+          const m = /^inq_\d+$/.exec(input || '');
+          if (!m) {
+            await sendInquietudList(from);
             break;
           }
-          // Buscar por teléfono
-          const found = await searchLeadByPhone(raw);
-          if (!found || !found.length) {
-  // Guardamos el celular para el nuevo lead
-  currentState.step = "create_lead_confirm";
-  currentState.newLead = { phoneDigits: raw };
-  await sendMessage(from, {
-    type: "interactive",
-    interactive: {
-      type: "button",
-      body: { text: `⚠️ No existe un Lead con *${raw}*.\n\n¿Querés crear uno nuevo y vincularlo al contacto?` },
-      action: {
-        buttons: [
-          { type: "reply", reply: { id: "create_lead_yes", title: "✅ Crear Lead" } },
-          { type: "reply", reply: { id: "create_lead_no",  title: "❌ Cancelar" } },
-        ]
-      }
-    }
-  });
-  break;
-}
-          const lead = found[0];
-          const nameField = (lead.fields || []).find(f => f.external_id === 'contacto-2');
-          const leadName = nameField
-            ? nameField.values?.[0]?.value?.title || 'Sin nombre'
-            : 'Sin nombre';
+          currentState.leadDraft.inquietud = INQUIETUD_MAP[m[0]];
+          currentState.step = 'awaiting_presupuesto';
+          await sendPresupuestoList(from);
+          break;
+        }
 
-          currentState.step = 'update_lead_menu';
-          currentState.leadItemId = lead.item_id;
-          await sendLeadUpdateMenu(from, leadName);
+        case 'awaiting_presupuesto': {
+          if (input === 'pre_more') {
+            currentState.step = 'awaiting_presupuesto_high';
+            await sendPresupuestoHighList(from);
+            break;
+          }
+          const m = /^pre_\d+$/.exec(input || '');
+          if (!m) {
+            await sendPresupuestoList(from);
+            break;
+          }
+          currentState.leadDraft.presupuesto = PRESUPUESTO_MAP[m[0]];
+          currentState.step = 'awaiting_que_busca';
+          await sendQueBuscaList(from);
+          break;
+        }
+
+        case 'awaiting_presupuesto_high': {
+          const m = /^pre_1[01]$/.exec(input || ''); // 10 u 11
+          if (!m) {
+            await sendPresupuestoHighList(from);
+            break;
+          }
+          currentState.leadDraft.presupuesto = PRESUPUESTO_MAP[m[0]];
+          currentState.step = 'awaiting_que_busca';
+          await sendQueBuscaList(from);
+          break;
+        }
+
+        case 'awaiting_que_busca': {
+          const m = /^qb_[12345]$/.exec(input || '');
+          if (!m) {
+            await sendQueBuscaList(from);
+            break;
+          }
+          currentState.leadDraft.busca = BUSCA_MAP[m[0]];
+          currentState.step = 'awaiting_expectativa';
+          await sendExpectativaList(from);
+          break;
+        }
+
+        case 'awaiting_expectativa': {
+          const m = /^exp_(1|2|3|4|6|8|9)$/.exec(input || '');
+          if (!m) {
+            await sendExpectativaList(from);
+            break;
+          }
+          currentState.leadDraft.expectativa = EXPECTATIVA_MAP[m[0]];
+
+          // 🧩 Crear el Lead en Podio
+          try {
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+            const fields = {
+              'contacto-2': [{ item_id: currentState.contactItemId }],
+              'telefono-busqueda': currentState.tempPhoneDigits,
+              'vendedor-asignado-2': [vendedorId],
+              'lead-status': [currentState.leadDraft.inquietud],
+              'presupuesto-2': [currentState.leadDraft.presupuesto],
+              busca: [currentState.leadDraft.busca],
+              'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+            };
+
+            const created = await createItemIn('leads', fields);
+
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+            });
+
+            // 👉 No volvemos al menú de “Actualizar Lead”.
+            // Ofrecemos opciones generales:
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Necesitás algo más?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'post_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'post_cancel', title: '❌ Nada más' } },
+                  ],
+                },
+              },
+            });
+
+            delete userStates[numeroRemitente];
+          } catch (e) {
+            console.error('Error creando Lead:', e.response?.data || e.message);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
           break;
         }
 
@@ -2124,87 +2302,111 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case "create_lead_confirm": {
-  if (input === "create_lead_yes") {
-    // Vinculamos (o creamos) el contacto por teléfono
-    const phone = currentState.newLead?.phoneDigits;
-    const { item_id: contactoId } = await findOrCreateContactByPhone(phone, numeroRemitente);
-    currentState.newLead.contactoId = contactoId;
+        case 'create_lead_confirm': {
+          if (input === 'create_lead_yes') {
+            // Vinculamos (o creamos) el contacto por teléfono
+            const phone = currentState.newLead?.phoneDigits;
+            const { item_id: contactoId } = await findOrCreateContactByPhone(
+              phone,
+              numeroRemitente,
+            );
+            currentState.newLead.contactoId = contactoId;
 
-    // Pregunta 1
-    currentState.step = "create_lead_inquietud";
-    await sendInquietudList(from);
-  } else if (input === "create_lead_no" || low === "cancelar") {
-    delete userStates[numeroRemitente];
-    await sendFarewell(from);
-  } else {
-    await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
-  }
-  break;
-}
+            // Pregunta 1
+            currentState.step = 'create_lead_inquietud';
+            await sendInquietudList(from);
+          } else if (input === 'create_lead_no' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+          } else {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: 'Tocá un botón para continuar o escribí *cancelar*.' },
+            });
+          }
+          break;
+        }
 
-case "create_lead_inquietud": {
-  const id = INQUIETUD_MAP[input];
-  if (!id) { await sendInquietudList(from); break; }
-  currentState.newLead["lead-status"] = [id];
-  currentState.step = "create_lead_presupuesto";
-  await sendPresupuestoList(from);
-  break;
-}
+        case 'create_lead_inquietud': {
+          const id = INQUIETUD_MAP[input];
+          if (!id) {
+            await sendInquietudList(from);
+            break;
+          }
+          currentState.newLead['lead-status'] = [id];
+          currentState.step = 'create_lead_presupuesto';
+          await sendPresupuestoList(from);
+          break;
+        }
 
-case "create_lead_presupuesto": {
-  const id = PRESUP_MAP[input];
-  if (!id) { await sendPresupuestoList(from); break; }
-  currentState.newLead["presupuesto-2"] = [id];
-  currentState.step = "create_lead_busca";
-  await sendBuscaList(from);
-  break;
-}
+        case 'create_lead_presupuesto': {
+          const id = PRESUP_MAP[input];
+          if (!id) {
+            await sendPresupuestoList(from);
+            break;
+          }
+          currentState.newLead['presupuesto-2'] = [id];
+          currentState.step = 'create_lead_busca';
+          await sendBuscaList(from);
+          break;
+        }
 
-case "create_lead_busca": {
-  const id = BUSCA_MAP[input];
-  if (!id) { await sendBuscaList(from); break; }
-  currentState.newLead["busca"] = [id];
-  currentState.step = "create_lead_expectativa";
-  await sendExpectativaList(from);
-  break;
-}
+        case 'create_lead_busca': {
+          const id = BUSCA_MAP[input];
+          if (!id) {
+            await sendBuscaList(from);
+            break;
+          }
+          currentState.newLead['busca'] = [id];
+          currentState.step = 'create_lead_expectativa';
+          await sendExpectativaList(from);
+          break;
+        }
 
-case "create_lead_expectativa": {
-  const id = EXPECTATIVA_MAP[input];
-  if (!id) { await sendExpectativaList(from); break; }
+        case 'create_lead_expectativa': {
+          const id = EXPECTATIVA_MAP[input];
+          if (!id) {
+            await sendExpectativaList(from);
+            break;
+          }
 
-  // Armamos campos para Podio
-  currentState.newLead["ideal-time-frame-of-sale"] = [id];
+          // Armamos campos para Podio
+          currentState.newLead['ideal-time-frame-of-sale'] = [id];
 
-  const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-  const phone = currentState.newLead.phoneDigits;
-  const contactoId = currentState.newLead.contactoId;
+          const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+          const phone = currentState.newLead.phoneDigits;
+          const contactoId = currentState.newLead.contactoId;
 
-  const fields = cleanDeep({
-    "contacto-2": contactoId ? [{ item_id: contactoId }] : undefined,
-    "telefono-2": [{ type: "mobile", value: phone }],
-    "vendedor-asignado-2": [vendedorId],
-    "lead-status": currentState.newLead["lead-status"],
-    "presupuesto-2": currentState.newLead["presupuesto-2"],
-    "busca": currentState.newLead["busca"],
-    "ideal-time-frame-of-sale": currentState.newLead["ideal-time-frame-of-sale"],
-    // opcional: "seguimiento": `[${nowStamp()}] Lead creado desde WhatsApp`,
-  });
+          const fields = cleanDeep({
+            'contacto-2': contactoId ? [{ item_id: contactoId }] : undefined,
+            'telefono-2': [{ type: 'mobile', value: phone }],
+            'vendedor-asignado-2': [vendedorId],
+            'lead-status': currentState.newLead['lead-status'],
+            'presupuesto-2': currentState.newLead['presupuesto-2'],
+            busca: currentState.newLead['busca'],
+            'ideal-time-frame-of-sale': currentState.newLead['ideal-time-frame-of-sale'],
+            // opcional: "seguimiento": `[${nowStamp()}] Lead creado desde WhatsApp`,
+          });
 
-  try {
-    const created = await createItemIn("leads", fields);
-    await sendMessage(from, { type: 'text', text: { body: "✅ Lead creado y vinculado al contacto." } });
-    // 👉 No volvemos al menú de actualizar lead; ofrecemos cierre:
-    currentState.step = "post_results_options";
-    await sendPostResultsOptions(from);
-  } catch (e) {
-    console.error("create lead fail:", e.response?.data || e.message);
-    await sendMessage(from, { type: 'text', text: { body: "❌ No pude crear el Lead. Probá más tarde." } });
-    delete userStates[numeroRemitente];
-  }
-  break;
-}
+          try {
+            const created = await createItemIn('leads', fields);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ Lead creado y vinculado al contacto.' },
+            });
+            // 👉 No volvemos al menú de actualizar lead; ofrecemos cierre:
+            currentState.step = 'post_results_options';
+            await sendPostResultsOptions(from);
+          } catch (e) {
+            console.error('create lead fail:', e.response?.data || e.message);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
 
         case 'after_update_options': {
           if (input === 'after_back_menu') {
