@@ -311,8 +311,18 @@ async function summarizeWithOpenAI(text) {
     const out = (data.choices?.[0]?.message?.content || "").trim();
     return out || raw;
   } catch (err) {
-    console.error("OpenAI summarize error:", err.response?.data || err.message);
-    return raw; // fallback por cuota o error
+    // --- ESTA ES LA MAGIA DEL DIAGNÓSTICO ---
+    console.error("\n--- ❌ ERROR DETALLADO DE LA API DE OPENAI ---");
+    if (err.response) {
+      // El error viene de la API de OpenAI (ej: sin crédito, límite, etc.)
+      console.error("Status Code:", err.response.status);
+      console.error("Respuesta de OpenAI:", JSON.stringify(err.response.data, null, 2));
+    } else {
+      // El error es de red o de otro tipo (ej: timeout)
+      console.error("Error sin respuesta de la API:", err.message);
+    }
+    console.error("--------------------------------------------\n");
+    return raw; // Devolvemos el texto original como fallback
   }
 }
 
