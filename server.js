@@ -1189,23 +1189,21 @@ app.post("/whatsapp", async (req, res) => {
 
     try {
         const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-        console.log("[WHATSAPP] tipo:", message.type, "| from:", message.from);
+if (!message) return; // ← primero chequeamos que exista
+
+// Declaramos las variables ANTES de usarlas
+let userInput = '';
+let interactiveReplyId = null;
+
+// Ahora sí, podemos loguear message.*
+console.log("[WHATSAPP] tipo:", message.type, "| from:", message.from);
 if (message.type === "audio") {
   console.log("[WHATSAPP] audio.id:", message.audio?.id);
 }
 
-console.log("[INPUT] interactiveReplyId:", interactiveReplyId, "| userInput:", userInput);
-
-
-        if (!message) return;
-
-        const from = message.from;
-        const numeroRemitente = `whatsapp:+${from}`;
-        let currentState = userStates[numeroRemitente];
-
-        // --- INICIO DEL BLOQUE CORREGIDO ---
-let userInput = '';
-let interactiveReplyId = null;
+const from = message.from;
+const numeroRemitente = `whatsapp:+${from}`;
+let currentState = userStates[numeroRemitente];
 
 if (message.type === 'text') {
   userInput = (message.text?.body || "").trim();
