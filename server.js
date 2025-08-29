@@ -884,13 +884,16 @@ async function attachMetaAudioToPodio(leadItemId, mediaId) {
     // 3) Subir a Podio /file
     const token = await getAppAccessTokenFor("leads");
     const form = new FormData();
-    form.append("source", "whatsapp");
-    form.append("file", buf, { filename: "whatsapp-voice.ogg", contentType });
+// 👉 el binario VA en `source`
+form.append("source", buf, { filename: "whatsapp-voice.ogg", contentType });
+// 👉 y además mandamos un `filename` explícito (Podio lo valida)
+form.append("filename", "whatsapp-voice.ogg");
 
-    const up = await axios.post("https://api.podio.com/file/", form, {
-      headers: { Authorization: `OAuth2 ${token}`, ...form.getHeaders() },
-      timeout: 60000,
-    });
+const up = await axios.post("https://api.podio.com/file/", form, {
+  headers: { Authorization: `OAuth2 ${token}`, ...form.getHeaders() },
+  timeout: 60000,
+});
+
     const fileId = up.data?.file_id;
     if (!fileId) throw new Error("no_file_id");
 
@@ -1276,8 +1279,11 @@ if (message.type === 'text') {
 } else if (message.type === 'audio') {
   try {
     const mediaId = message.audio.id;
-    const { text: asrText } = await transcribeAudioFromMeta(mediaId);
-    userInput = (asrText || "").trim();
+const { text: asrText } = await transcribeAudioFromMeta(mediaId);
+userInput = (asrText || "").trim();
+if (userStates[numeroRemitente]) {
+  userStates[numeroRemitente].lastAudioMediaId = mediaId;
+}
 
     // 👉 NUEVO: recordamos el audio para adjuntarlo luego al lead
     if (userStates[numeroRemitente]) {
@@ -1772,6 +1778,17 @@ if (result?.ok) {
   console.log("[DIAGNÓSTICO] Falló el resumen. Intentando guardar transcripción cruda en Podio.");
   await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
   await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé la transcripción completa para que no se pierda la info." } });
+}
+if (currentState.lastAudioMediaId) {
+  const attach = await attachMetaAudioToPodio(leadId, currentState.lastAudioMediaId);
+  if (attach.ok) {
+    await appendToLeadSeguimiento(leadId, "🎧 Audio de WhatsApp adjuntado al lead.");
+    await sendMessage(from, { type: 'text', text: { body: "🎧 También adjunté el audio al lead." } });
+  } else {
+    console.error("No se pudo adjuntar el audio:", attach.error);
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé el texto, pero no pude adjuntar el audio." } });
+  }
+  delete currentState.lastAudioMediaId;
 }
 
 // 👉 NUEVO: si la conversación vino por audio, lo adjuntamos al lead
