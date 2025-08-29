@@ -1379,18 +1379,24 @@ case "awaiting_price_range": {
   // BUSCAR y mostrar página 1
     const results = await searchProperties(currentState.filters);
   if (!results || !results.length) {
-    currentState.step = "awaiting_price_retry";
-    currentState.priceLevel = "high";
-    await sendMessage(from, {
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
-        action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+  currentState.step = "awaiting_price_retry";
+  // Siempre volvemos al menú PRINCIPAL de rangos, como pediste
+  currentState.priceLevel = "main";
+  await sendMessage(from, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "price_retry_main",   title: "🔁 Elegir otro rango" } },
+          { type: "reply", reply: { id: "price_retry_cancel", title: "❌ Cancelar" } }
+        ]
       }
-    });
-    break;
-  }
+    }
+  });
+  break;
+}
 
   currentState.step = "showing_results";
   currentState.results = results;
@@ -1415,18 +1421,24 @@ case "awaiting_price_range_high": {
   // BUSCAR y mostrar página 1
   const results = await searchProperties(currentState.filters);
   if (!results || !results.length) {
-    currentState.step = "awaiting_price_retry";
-    currentState.priceLevel = "main";
-    await sendMessage(from, {
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
-        action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+  currentState.step = "awaiting_price_retry";
+  // También volvemos al menú PRINCIPAL (no al de “alto”)
+  currentState.priceLevel = "main";
+  await sendMessage(from, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "price_retry_main",   title: "🔁 Elegir otro rango" } },
+          { type: "reply", reply: { id: "price_retry_cancel", title: "❌ Cancelar" } }
+        ]
       }
-    });
-    break;
-  }
+    }
+  });
+  break;
+}
 
   currentState.step = "showing_results";
   currentState.results = results;
@@ -1457,17 +1469,28 @@ case "showing_results": {
 }
 
 case "awaiting_price_retry": {
-  if (input === "price_retry") {
-    if (currentState.priceLevel === "high") {
-      currentState.step = "awaiting_price_range_high";
-      await sendHighPriceList(from);
-    } else {
-      currentState.step = "awaiting_price_range";
-      await sendPriceRangeList(from);
-    }
-  } else {
+  if (input === "price_retry_main") {
+    // Siempre mostramos el menú PRINCIPAL de rangos
+    currentState.step = "awaiting_price_range";
+    await sendPriceRangeList(from);
+  } else if (input === "price_retry_cancel" || low === "cancelar") {
     delete userStates[numeroRemitente];
     await sendMainMenu(from);
+  } else {
+    // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+    await sendMessage(from, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+        action: {
+          buttons: [
+            { type: "reply", reply: { id: "price_retry_main",   title: "🔁 Elegir otro rango" } },
+            { type: "reply", reply: { id: "price_retry_cancel", title: "❌ Cancelar" } }
+          ]
+        }
+      }
+    });
   }
   break;
 }
