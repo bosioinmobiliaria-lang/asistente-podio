@@ -30,7 +30,9 @@ async function getPodioToken() {
     console.log('Token obtenido con éxito.');
     return data.access_token;
   } catch (err) {
-    console.error("ERROR GRAVE: No se pudo obtener el token de Podio. Revisa las variables .env y los permisos del token.");
+    console.error(
+      'ERROR GRAVE: No se pudo obtener el token de Podio. Revisa las variables .env y los permisos del token.',
+    );
     console.error(err.response ? err.response.data : err.message);
     process.exit(1);
   }
@@ -54,7 +56,7 @@ function guardarProgreso(offset, actualizados, fallidos) {
 async function iniciarActualizacion() {
   const token = await getPodioToken();
   let { offset, actualizados, fallidos } = leerProgreso();
-  
+
   console.log(`\n--- INICIANDO SINCRONIZACIÓN ---`);
   console.log(`Resumiendo desde la propiedad número: ${offset}`);
 
@@ -64,7 +66,7 @@ async function iniciarActualizacion() {
       const response = await axios.post(
         `https://api.podio.com/item/app/${PROPIEDADES_APP_ID}/filter/`,
         { limit: 100, offset: offset },
-        { headers: { Authorization: `OAuth2 ${token}` } }
+        { headers: { Authorization: `OAuth2 ${token}` } },
       );
 
       const items = response.data.items;
@@ -95,17 +97,21 @@ async function iniciarActualizacion() {
             await axios.put(
               `https://api.podio.com/item/${itemId}`,
               { fields: fieldsToUpdate },
-              { headers: { Authorization: `OAuth2 ${token}` } }
+              { headers: { Authorization: `OAuth2 ${token}` } },
             );
             actualizados++;
             console.log(`(${offset + 1}) Propiedad #${itemId} actualizada con éxito.`);
           } catch (updateError) {
             fallidos++;
-            console.error(`(${offset + 1}) ⚠️  ERROR al actualizar Propiedad #${itemId}. Saltando...`);
-            console.error(`   Motivo: ${updateError.response ? updateError.response.data.error_description : updateError.message}`);
+            console.error(
+              `(${offset + 1}) ⚠️  ERROR al actualizar Propiedad #${itemId}. Saltando...`,
+            );
+            console.error(
+              `   Motivo: ${updateError.response ? updateError.response.data.error_description : updateError.message}`,
+            );
           }
         }
-        
+
         offset++;
         guardarProgreso(offset, actualizados, fallidos);
       }
