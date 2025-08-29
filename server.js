@@ -226,40 +226,36 @@ async function appendToLeadSeguimiento(itemId, newLinePlain) {
   try {
     const token = await getAppAccessTokenFor("leads");
 
-    // 1) Leer item para traer el valor anterior y el field_id
+    // 1) Traer meta del item y ubicar el field_id correcto
     const item = await getLeadDetails(itemId);
     const segField = item?.fields?.find(f => f.external_id === "seguimiento");
-    if (!segField) return { ok: false, error: "Campo 'seguimiento' no encontrado" };
+    if (!segField?.field_id) {
+      console.error("[Seguimiento] Campo 'seguimiento' NO encontrado en item:", itemId);
+      return { ok: false, error: "no_field" };
+    }
 
-    const prev = (segField.values?.[0]?.value || "").toString();
-    const entry = formatSeguimientoEntry(newLinePlain); // "[YYYY-MM-DD HH:MM:SS] contenido"
+    // 2) Merge de valor anterior + nueva línea ya formateada
+    const prev = ((segField.values?.[0]?.value ?? "") + "").replace(/\r/g, "");
+    const entry = formatSeguimientoEntry(newLinePlain); // "[YYYY-MM-DD HH:MM:SS] ..."
     const merged = prev ? `${prev}\n${entry}` : entry;
 
-    // 2) INTENTO 1: por external_id (forma más simple)
-    try {
-      await axios.put(
-        `https://api.podio.com/item/${itemId}/value/seguimiento`,
-        [{ value: merged }],
-        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
-      );
-      return { ok: true };
-    } catch (e1) {
-      // 3) INTENTO 2: por field_id (fallback)
-      try {
-        await axios.put(
-          `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
-          [{ value: merged }], // *** importante: sin "type"
-          { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
-        );
-        return { ok: true };
-      } catch (e2) {
-        console.error("PUT seguimiento falló:", e2.response?.data || e2.message);
-        return { ok: false, error: e2.response?.data || e2.message };
-      }
-    }
-  } catch (err) {
-    console.error("appendToLeadSeguimiento error:", err.response?.data || err.message);
-    return { ok: false, error: err.response?.data || err.message };
+    // 3) Actualizar SIEMPRE por field_id
+    const url = `https://api.podio.com/item/${itemId}/value/${segField.field_id}`;
+    const body = [{ value: merged }];
+
+    await axios.put(url, body, {
+      headers: {
+        Authorization: `OAuth2 ${token}`,
+        "Content-Type": "application/json"
+      },
+      timeout: 20000
+    });
+
+    console.log("[Seguimiento] Actualizado OK en item:", itemId);
+    return { ok: true };
+  } catch (e) {
+    console.error("[Seguimiento] ERROR al actualizar:", e.response?.status, e.response?.data || e.message);
+    return { ok: false, error: e.response?.data || e.message };
   }
 }
 
@@ -1712,14 +1708,21 @@ case "awaiting_newconv_text": {
 
   await sendMessage(from, { type: 'text', text: { body: "🎙️ Analizando... Dame un momento para resumir y guardar en Podio." } });
 
-  const resumen = await summarizeWithOpenAI(raw);
-const ok1 = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
-if (ok1?.ok) {
-  await sendMessage(from, { type: 'text', text: { body: "✅ ¡Listo! Guardé el resumen en el seguimiento del lead." } });
+const resumen = await summarizeWithOpenAI(raw);
+const r1 = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
+
+if (!r1.ok) {
+  console.error("[Seguimiento] Error guardando RESUMEN:", r1.error);
+  const r2 = await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
+
+  if (!r2.ok) {
+    console.error("[Seguimiento] Error guardando TRANSCRIPCIÓN:", r2.error);
+    await sendMessage(from, { type: 'text', text: { body: "❌ No pude guardar en Podio. Avisá al administrador." } });
+  } else {
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude resumir, pero guardé la transcripción completa." } });
+  }
 } else {
-  console.log("[DIAGNÓSTICO] Falló el resumen. Guardando transcripción cruda.");
-  await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
-  await sendMessage(from, { type: 'text', text: { body: "⚠️ Guardé la transcripción completa para que no se pierda la info." } });
+  await sendMessage(from, { type: 'text', text: { body: "✅ Guardé el resumen en el seguimiento del lead." } });
 }
 
 // 👉 NUEVO: si la conversación vino por audio, lo adjuntamos al lead
