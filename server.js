@@ -103,15 +103,19 @@ function formatPodioDate(dateString) {
 }
 
 // --- Timestamp "AAAA-MM-DD HH:MM:SS" (hora local del server) ---
-function nowStamp() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+function nowStamp(tz = 'America/Argentina/Buenos_Aires') {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t)?.value || '00';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 // --- Línea PLANA para guardar en "seguimiento": [fecha] contenido ---
@@ -325,7 +329,7 @@ async function summarizeWithOpenAI(text) {
           {
             role: 'system',
             content:
-              'Sos un asistente para inmobiliaria. Si te paso texto transcrito de un audio, devolvé un resumen BREVE (1–2 oraciones) con: intención, zona/propiedad, presupuesto/tiempo y próxima acción. Sin encabezados ni relleno.',
+              "Sos asistente de una inmobiliaria. Si recibís la transcripción de un audio, devolvé EXCLUSIVAMENTE viñetas con '• ' al inicio de cada línea. Entre 3 y 6 bullets, en español, sin título ni cierre. Extraé pedidos/condiciones: tipo de propiedad, zonas, presupuesto, tiempos, restricciones, dudas y próximas acciones. No inventes datos.",
           },
           { role: 'user', content: raw },
         ],
@@ -863,7 +867,7 @@ async function sendAfterUpdateOptions(to) {
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Menú principal' } },
-          { type: 'reply', reply: { id: 'after_done', title: '❌ Nada más' } },
+          { type: 'reply', reply: { id: 'after_done', title: '❌ Cancelar' } },
         ],
       },
     },
@@ -1933,24 +1937,28 @@ app.post('/whatsapp', async (req, res) => {
           delete currentState.lastInputType;
 
           // Volver a la botonera del lead
-          currentState.step = "after_update_options";
+          currentState.step = 'after_update_options';
           await sendAfterUpdateOptions(from);
           break;
         }
 
-        case "after_update_options": {
-          if (input === "after_back_menu") {
-          delete userStates[numeroRemitente];
-          await sendMainMenu(from);
-        } else if (input === "after_done" || low === "nada mas" || low === "nada más") {
-          delete userStates[numeroRemitente];
-          await sendMessage(from, { type: "text", text: { body: "🙏 Gracias, estoy para ayudarte." } });
-        } else {
-          await sendAfterUpdateOptions(from);
-        }
+        case 'after_update_options': {
+          if (input === 'after_back_menu') {
+            delete userStates[numeroRemitente];
+            await sendMainMenu(from);
+          } else if (input === 'after_done' || low === 'cancelar' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '✨ Fue un gusto ayudarte. Estoy para acompañarte; cuando quieras, escribime. 🙌',
+              },
+            });
+          } else {
+            await sendAfterUpdateOptions(from);
+          }
           break;
         }
-
 
         case 'awaiting_visit_date': {
           const leadId = currentState.leadItemId;
