@@ -514,6 +514,22 @@ async function sendMainMenu(to) {
 
 async function sendMenuGeneral(to) { return sendMainMenu(to); }
 
+// Opciones finales tras mostrar todas las propiedades
+async function sendPostResultsOptions(to) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "¿Necesitás algo más?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "post_back_menu", title: "🏠 Menú principal" } },
+          { type: "reply", reply: { id: "post_cancel",    title: "❌ Cancelar" } }
+        ]
+      }
+    }
+  });
+}
 
 // Lista de orígenes con emoji (≤ 24 chars por fila)
 async function sendOriginList(to) {
@@ -669,16 +685,19 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
   const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
   await sendMessage(to, { type: 'text', text: { body: message } });
 
-  if (hasMore) {
-    await sendMessage(to, {
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "¿Ver más resultados?" },
-        action: { buttons: [{ type: "reply", reply: { id: "props_more", title: "➡️ Ver más" } }] }
-      }
-    });
-  }
+if (hasMore) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "¿Ver más resultados?" },
+      action: { buttons: [{ type: "reply", reply: { id: "props_more", title: "➡️ Ver más" } }] }
+    }
+  });
+} else {
+  // Si ya mostramos todo, ofrecer opciones finales
+  await sendPostResultsOptions(to);
+}
 }
 
 async function searchProperties(filters) {
@@ -714,6 +733,14 @@ async function searchProperties(filters) {
     console.error("Error al buscar propiedades en Podio:", err.response ? err.response.data : err.message);
     return [];
   }
+}
+
+// Mensaje de despedida estándar
+async function sendFarewell(to) {
+  await sendMessage(to, {
+    type: "text",
+    text: { body: "✨ Fue un gusto ayudarte. Estoy para acompañarte; cuando quieras, escribime. 🙌" }
+  });
 }
 
 async function createItemIn(appName, fields) {
@@ -1109,9 +1136,11 @@ app.post("/whatsapp", async (req, res) => {
         // Cancelar y volver al menú
             const low = (input || "").toLowerCase(); // ← evita crash si input es undefined
         if (low === "cancelar" || low === "volver") {
-            delete userStates[numeroRemitente];
-            await sendMainMenu(from);
-        } else if (currentState) {
+  delete userStates[numeroRemitente];
+  await sendFarewell(from);
+  await sendMainMenu(from);
+} 
+          else if (currentState) {
             // --------------------
             // Flujo con estado (LA LÓGICA INTERNA NO CAMBIA, SOLO EL ENVÍO)
             // --------------------
@@ -1241,10 +1270,11 @@ case "awaiting_contact_type": {
     currentState.step = "awaiting_name_only";
     await sendMessage(from, { type: 'text', text: { body: "✍️ Decime *Nombre y Apellido*." } });
   } else if (input === "confirm_create_no" || low === "cancelar") {
-    delete userStates[numeroRemitente];
-    await sendMessage(from, { type: 'text', text: { body: "Operación cancelada. Volvemos al menú." } });
-    await sendMainMenu(from);
-  } else {
+  delete userStates[numeroRemitente];
+  await sendFarewell(from);
+  await sendMainMenu(from);
+}
+  else {
     await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
   }
   break;
@@ -1455,15 +1485,30 @@ case "showing_results": {
     const results = currentState.results || [];
     const idx = currentState.nextIndex || 0;
     if (idx >= results.length) {
-      await sendMessage(from, { type: 'text', text: { body: "No hay más resultados 🙂" } });
-      delete userStates[numeroRemitente];
-      break;
-    }
+  await sendMessage(from, { type: 'text', text: { body: "No hay más resultados 🙂" } });
+  currentState.step = "post_results_options";
+  await sendPostResultsOptions(from);
+  break;
+}
     await sendPropertiesPage(from, results, idx);
     currentState.nextIndex = idx + 5;
   } else {
     delete userStates[numeroRemitente];
     await sendMainMenu(from);
+  }
+  break;
+}
+
+case "post_results_options": {
+  if (input === "post_back_menu") {
+    delete userStates[numeroRemitente];
+    await sendMainMenu(from);
+  } else if (input === "post_cancel" || low === "cancelar") {
+    delete userStates[numeroRemitente];
+    await sendFarewell(from);
+  } else {
+    // Repetimos opciones si escribe otra cosa
+    await sendPostResultsOptions(from);
   }
   break;
 }
@@ -1474,9 +1519,10 @@ case "awaiting_price_retry": {
     currentState.step = "awaiting_price_range";
     await sendPriceRangeList(from);
   } else if (input === "price_retry_cancel" || low === "cancelar") {
-    delete userStates[numeroRemitente];
-    await sendMainMenu(from);
-  } else {
+  delete userStates[numeroRemitente];
+  await sendFarewell(from);
+  await sendMainMenu(from);
+} else {
     // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
     await sendMessage(from, {
       type: "interactive",
