@@ -735,6 +735,53 @@ async function searchProperties(filters) {
   }
 }
 
+// Botonera de acciones sobre un lead encontrado
+async function sendLeadUpdateMenu(to, leadName) {
+  await sendMessage(to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      header: { type: "text", text: `👤 ${leadName}` },
+      body: { text: "¿Qué querés hacer?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "update_info",   title: "ℹ️ Info" } },
+          { type: "reply", reply: { id: "update_newconv", title: "📝 Nueva conversación" } },
+          { type: "reply", reply: { id: "update_visit",   title: "📅 Agendar visita" } }
+        ]
+      }
+    }
+  });
+}
+
+// Actualiza el campo de fecha del lead (si existe)
+async function updateLeadDate(itemId, inputStr) {
+  try {
+    const meta = await getLeadsFieldsMeta();
+    const dateFieldMeta = meta.find(f => f.type === "date");
+    const dateExternalId =
+      process.env.PODIO_LEADS_DATE_EXTERNAL_ID ||
+      (dateFieldMeta ? dateFieldMeta.external_id : null);
+    if (!dateExternalId) return { ok: false, error: "No hay campo fecha en Leads" };
+
+    const token = await getAppAccessTokenFor("leads");
+    const parts = splitDateTime(inputStr); // {date, time}
+    if (!parts?.date) return { ok: false, error: "Fecha inválida" };
+
+    await axios.put(
+      `https://api.podio.com/item/${itemId}/value/${dateExternalId}`,
+      [{ value: { start_date: parts.date } }],
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
+    );
+    // Dejar registro simple en seguimiento
+    const tt = parts.time && parts.time !== "00:00:00" ? ` ${parts.time.slice(0,5)}hs` : "";
+    await appendToLeadSeguimiento(itemId, `Visita agendada para ${parts.date}${tt}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.response?.data || e.message };
+  }
+}
+
 // Mensaje de despedida estándar
 async function sendFarewell(to) {
   await sendMessage(to, {
@@ -1138,8 +1185,8 @@ app.post("/whatsapp", async (req, res) => {
         if (low === "cancelar" || low === "volver") {
   delete userStates[numeroRemitente];
   await sendFarewell(from);
-  await sendMainMenu(from);
-} 
+  return; // ← no seguimos, no mostramos menú
+}
           else if (currentState) {
             // --------------------
             // Flujo con estado (LA LÓGICA INTERNA NO CAMBIA, SOLO EL ENVÍO)
@@ -1272,7 +1319,7 @@ case "awaiting_contact_type": {
   } else if (input === "confirm_create_no" || low === "cancelar") {
   delete userStates[numeroRemitente];
   await sendFarewell(from);
-  await sendMainMenu(from);
+  break; // ← no menú
 }
   else {
     await sendMessage(from, { type: 'text', text: { body: "Tocá un botón para continuar o escribí *cancelar*." } });
@@ -1521,7 +1568,7 @@ case "awaiting_price_retry": {
   } else if (input === "price_retry_cancel" || low === "cancelar") {
   delete userStates[numeroRemitente];
   await sendFarewell(from);
-  await sendMainMenu(from);
+  break; // ← no menú
 } else {
     // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
     await sendMessage(from, {
@@ -1540,6 +1587,96 @@ case "awaiting_price_retry": {
   }
   break;
 }
+
+case "update_lead_start": {
+  const raw = (input || "").replace(/\D/g, "");
+  if (!isValidArMobile(raw)) {
+    await sendMessage(from, { type: 'text', text: { body: "🙈 Número inválido. Mandá *10 dígitos* (sin 0/15)." } });
+    break;
+  }
+  // Buscar por teléfono
+  const found = await searchLeadByPhone(raw);
+  if (!found || !found.length) {
+    await sendMessage(from, { type: 'text', text: { body: "😕 No encontré un lead con ese número. Probá otro o escribí *cancelar*." } });
+    break;
+  }
+  const lead = found[0];
+  const nameField = (lead.fields || []).find(f => f.external_id === "contacto-2");
+  const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
+
+  currentState.step = "update_lead_menu";
+  currentState.leadItemId = lead.item_id;
+  await sendLeadUpdateMenu(from, leadName);
+  break;
+}
+
+case "update_lead_menu": {
+  const id = input;
+  const leadId = currentState.leadItemId;
+  if (!leadId) { delete userStates[numeroRemitente]; break; }
+
+  if (id === "update_info") {
+    const leadItem = await getLeadDetails(leadId);
+    const summary = formatLeadInfoSummary(leadItem);
+    await sendMessage(from, { type: 'text', text: { body: summary } });
+    // Volvemos a mostrar la botonera para seguir actuando
+    const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
+    const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
+    await sendLeadUpdateMenu(from, leadName);
+  } else if (id === "update_newconv") {
+    currentState.step = "awaiting_newconv_text";
+    await sendMessage(from, { type: 'text', text: { body: "✍️ Escribí un *resumen corto* de la conversación (1–2 frases)." } });
+  } else if (id === "update_visit") {
+    currentState.step = "awaiting_visit_date";
+    await sendMessage(from, { type: 'text', text: { body: "📅 Decime la *fecha* de la visita (AAAA-MM-DD). Podés agregar hora HH:MM." } });
+  } else {
+    await sendLeadUpdateMenu(from, "Lead");
+  }
+  break;
+}
+
+case "awaiting_newconv_text": {
+  const leadId = currentState.leadItemId;
+  const raw = (input || "").trim();
+  if (!raw) {
+    await sendMessage(from, { type: 'text', text: { body: "🤏 Necesito un texto. Probá de nuevo o escribí *cancelar*." } });
+    break;
+  }
+  const resumen = await summarizeWithOpenAI(raw);
+  const ok = await appendToLeadSeguimiento(leadId, `Nueva conversación: ${resumen}`);
+  if (ok?.ok) {
+    await sendMessage(from, { type: 'text', text: { body: "✅ Guardado en seguimiento." } });
+  } else {
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude guardar el seguimiento. Probá más tarde." } });
+  }
+  // Volver a la botonera del lead
+  currentState.step = "update_lead_menu";
+  const leadItem = await getLeadDetails(leadId);
+  const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
+  const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
+  await sendLeadUpdateMenu(from, leadName);
+  break;
+}
+
+case "awaiting_visit_date": {
+  const leadId = currentState.leadItemId;
+  const text = (input || "").trim();
+  const res = await updateLeadDate(leadId, text);
+  if (res.ok) {
+    await sendMessage(from, { type: 'text', text: { body: "📌 Visita agendada. Quedó registrada en el lead." } });
+  } else {
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude registrar la fecha. Enviá *AAAA-MM-DD* (y hora HH:MM opcional)." } });
+    break; // seguí en este paso hasta que lo mande bien
+  }
+  // Volver a la botonera del lead
+  currentState.step = "update_lead_menu";
+  const leadItem = await getLeadDetails(leadId);
+  const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
+  const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
+  await sendLeadUpdateMenu(from, leadName);
+  break;
+}
+
 
                 
                 // ... Y así sucesivamente para todos los demás `case` ...
@@ -1564,10 +1701,14 @@ case "awaiting_price_retry": {
   } else if (input === "menu_buscar") {
     userStates[numeroRemitente] = { step: "awaiting_property_type", filters: {} };
     await sendPropertyTypeList(from);
-  } else if (input === "menu_actualizar") { // <-- CAMBIO
-    userStates[numeroRemitente] = { step: "update_lead_start" };
-    await sendMessage(from, { type: 'text', text: { body: "🔧 *Actualizar LEAD*\nEnviame el *teléfono* (sin 0/15) o el *ID del item* de Podio del Lead que querés actualizar." } });
-  } else {
+  } else if (input === "menu_actualizar") {
+  userStates[numeroRemitente] = { step: "update_lead_start" };
+  await sendMessage(from, {
+    type: 'text',
+    text: { body: "🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos, sin 0/15) 📱" }
+  });
+}
+ else {
     await sendMainMenu(from); // <-- Botonera principal
   }
 }
