@@ -1672,12 +1672,17 @@ case "update_lead_menu": {
     await sendLeadUpdateMenu(from, leadName);
   } else if (id === "update_newconv") {
     currentState.step = "awaiting_newconv_text";
-    await sendMessage(from, { type: 'text', text: { body: "🗣️ Mandá *texto o audio* con el seguimiento. Lo guardo *tal cual*." } });
+    // MENSAJE MEJORADO: Avisamos que vamos a resumir.
+    await sendMessage(from, { type: 'text', text: { body: "🗣️ Enviá *texto o audio* con la conversación. Lo voy a resumir y guardar en el seguimiento." } });
   } else if (id === "update_visit") {
     currentState.step = "awaiting_visit_date";
     await sendMessage(from, { type: 'text', text: { body: "📅 Decime la *fecha* de la visita (AAAA-MM-DD). Podés agregar hora HH:MM." } });
   } else {
-    await sendLeadUpdateMenu(from, "Lead");
+    // Si eligen una opción inválida, mostramos el menú de nuevo.
+    const leadItem = await getLeadDetails(leadId);
+    const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
+    const leadName = nameField ? (nameField.values?.[0]?.value?.title || "Sin nombre") : "Sin nombre";
+    await sendLeadUpdateMenu(from, leadName);
   }
   break;
 }
@@ -1685,18 +1690,30 @@ case "update_lead_menu": {
 case "awaiting_newconv_text": {
   const leadId = currentState.leadItemId;
   const raw = (input || "").trim();
+  
   if (!raw) {
-    await sendMessage(from, { type: 'text', text: { body: "🤏 No escuché/entendí. Mandá *texto o audio* con el resumen, o escribí *cancelar*." } });
+    await sendMessage(from, { type: 'text', text: { body: "🤏 No entendí o el audio estaba vacío. Por favor, enviá de nuevo el seguimiento en *texto o audio*, o escribí *cancelar*." } });
     break;
   }
-  const contenido = raw; // sin resumir
-const ok = await appendToLeadSeguimiento(leadId, `Nueva conversación: ${contenido}`);
-  if (ok?.ok) {
-    await sendMessage(from, { type: 'text', text: { body: "✅ Guardado en seguimiento." } });
+
+  // 1. Avisamos al usuario que estamos procesando
+  await sendMessage(from, { type: 'text', text: { body: "🎙️ Analizando... Dame un momento para resumir y guardar en Podio." } });
+
+  // 2. ¡AQUÍ LA MAGIA! Usamos la función que ya tenés para resumir.
+  const resumen = await summarizeWithOpenAI(raw);
+  
+  // 3. Guardamos el resumen limpio en el campo de seguimiento.
+  const result = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
+
+  if (result?.ok) {
+    await sendMessage(from, { type: 'text', text: { body: "✅ ¡Listo! El resumen fue guardado en el seguimiento del lead." } });
   } else {
-    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude guardar el seguimiento. Probá más tarde." } });
+    // 4. Si falla, guardamos el texto plano como fallback para no perder la info
+    await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
+    await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude generar el resumen, pero guardé la transcripción completa para que no se pierda la información." } });
   }
-  // Volver a la botonera del lead
+
+  // 5. Volvemos a la botonera del lead para seguir trabajando
   currentState.step = "update_lead_menu";
   const leadItem = await getLeadDetails(leadId);
   const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
