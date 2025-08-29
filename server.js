@@ -224,39 +224,53 @@ function getTextFieldValue(item, externalId) {
 /** Guarda en 'seguimiento' SOLO "[fecha] contenido" (sin etiquetas extra) */
 async function appendToLeadSeguimiento(itemId, newLinePlain) {
   try {
-    const token = await getAppAccessTokenFor("leads");
+     const token = await getAppAccessTokenFor("leads");
 
-    // 1) Traer meta del item y ubicar el field_id correcto
-    const item = await getLeadDetails(itemId);
-    const segField = item?.fields?.find(f => f.external_id === "seguimiento");
-    if (!segField?.field_id) {
-      console.error("[Seguimiento] Campo 'seguimiento' NO encontrado en item:", itemId);
-      return { ok: false, error: "no_field" };
+         // 1) Traer el item para obtener el contenido anterior del campo.
+     const item = await getLeadDetails(itemId);
+    // Si el item no existe, salimos.
+     if (!item) {
+        console.error("[Seguimiento] No se pudo obtener el item:", itemId);
+        return { ok: false, error: "item_not_found" };
     }
 
-    // 2) Merge de valor anterior + nueva línea ya formateada
-    const prev = ((segField.values?.[0]?.value ?? "") + "").replace(/\r/g, "");
-    const entry = formatSeguimientoEntry(newLinePlain); // "[YYYY-MM-DD HH:MM:SS] ..."
-    const merged = prev ? `${prev}\n${entry}` : entry;
+    // Buscamos el campo. Si no está, es porque está vacío, lo cual es normal.
+     const segField = item?.fields?.find(f => f.external_id === "seguimiento");
 
-    // 3) Actualizar SIEMPRE por field_id
-    const url = `https://api.podio.com/item/${itemId}/value/${segField.field_id}`;
-    const body = [{ value: merged }];
+     // 2) Merge de valor anterior + nueva línea.
+    // Usamos 'optional chaining' (?.) para que no falle si segField es undefined.
+       const prev = ((segField?.values?.[0]?.value ?? "") + "").replace(/\r/g, "");
+        const entry = formatSeguimientoEntry(newLinePlain);
+       const merged = prev ? `${prev}\n${entry}` : entry;
 
-    await axios.put(url, body, {
-      headers: {
-        Authorization: `OAuth2 ${token}`,
-        "Content-Type": "application/json"
-      },
-      timeout: 20000
-    });
+     // 3) Actualizar SOLO el campo 'seguimiento' (forma correcta para Podio)
+try {
+  const url = `https://api.podio.com/item/${itemId}/value/seguimiento`;
+  const body = [{ value: merged }];
+
+  await axios.put(url, body, {
+    headers: { Authorization: `OAuth2 ${token}` },
+    timeout: 20000
+  });
+} catch (e1) {
+  // Fallback por field_id si lo tenés (p.ej. cuando el external_id no funciona)
+  if (segField?.field_id) {
+    await axios.put(
+      `https://api.podio.com/item/${itemId}/value/${segField.field_id}`,
+      [{ value: merged }],
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 }
+    );
+  } else {
+    throw e1;
+  }
+}
 
     console.log("[Seguimiento] Actualizado OK en item:", itemId);
-    return { ok: true };
-  } catch (e) {
-    console.error("[Seguimiento] ERROR al actualizar:", e.response?.status, e.response?.data || e.message);
-    return { ok: false, error: e.response?.data || e.message };
-  }
+     return { ok: true };
+     } catch (e) {
+     console.error("[Seguimiento] ERROR al actualizar:", e.response?.status, e.response?.data || e.message);
+     return { ok: false, error: e.response?.data || e.message };
+    }
 }
 
 // Extrae la primera URL que encuentre (sirve si viene en <a ...> o texto plano)
