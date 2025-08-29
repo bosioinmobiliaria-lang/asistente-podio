@@ -840,13 +840,30 @@ async function sendLeadUpdateMenu(to, leadName) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: `👤 ${leadName}` },
-      body: { text: '¿Qué querés hacer?' },
+      header: { type: 'text', text: '✅ Lead encontrado' },
+      body: { text: `Nombre: ${leadName}\n¿Qué querés hacer?` },
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'update_info', title: 'ℹ️ Info' } },
           { type: 'reply', reply: { id: 'update_newconv', title: '📝 Nueva conversación' } },
           { type: 'reply', reply: { id: 'update_visit', title: '📅 Agendar visita' } },
+        ],
+      },
+    },
+  });
+}
+
+// NUEVO: opciones luego de actualizar algo en el lead
+async function sendAfterUpdateOptions(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: '¿Necesitás algo más?' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Menú principal' } },
+          { type: 'reply', reply: { id: 'after_done', title: '❌ Nada más' } },
         ],
       },
     },
@@ -1916,15 +1933,24 @@ app.post('/whatsapp', async (req, res) => {
           delete currentState.lastInputType;
 
           // Volver a la botonera del lead
-          currentState.step = 'update_lead_menu';
-          const leadItem = await getLeadDetails(leadId);
-          const nameField = (leadItem.fields || []).find(f => f.external_id === 'contacto-2');
-          const leadName = nameField
-            ? nameField.values?.[0]?.value?.title || 'Sin nombre'
-            : 'Sin nombre';
-          await sendLeadUpdateMenu(from, leadName);
+          currentState.step = "after_update_options";
+          await sendAfterUpdateOptions(from);
           break;
         }
+
+        case "after_update_options": {
+          if (input === "after_back_menu") {
+          delete userStates[numeroRemitente];
+          await sendMainMenu(from);
+        } else if (input === "after_done" || low === "nada mas" || low === "nada más") {
+          delete userStates[numeroRemitente];
+          await sendMessage(from, { type: "text", text: { body: "🙏 Gracias, estoy para ayudarte." } });
+        } else {
+          await sendAfterUpdateOptions(from);
+        }
+          break;
+        }
+
 
         case 'awaiting_visit_date': {
           const leadId = currentState.leadItemId;
