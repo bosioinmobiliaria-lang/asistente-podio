@@ -1377,26 +1377,25 @@ case "awaiting_price_range": {
   currentState.filters.precio = { from: range.from, to: range.to };
 
   // BUSCAR y mostrar página 1
-  const items = await searchProperties(currentState.filters);
-  if (!items || !items.length) {
-  currentState.step = "awaiting_price_retry";
-  currentState.priceLevel = "high";
-  await sendMessage(from, {
-    type: "interactive",
-    interactive: {
-      type: "button",
-      body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
-      action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
-    }
-  });
-  break;
-}
-
+    const results = await searchProperties(currentState.filters);
+  if (!results || !results.length) {
+    currentState.step = "awaiting_price_retry";
+    currentState.priceLevel = "high";
+    await sendMessage(from, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+        action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+      }
+    });
+    break;
+  }
 
   currentState.step = "showing_results";
-  currentState.results = items;
+  currentState.results = results;
   currentState.nextIndex = 0;
-  await sendPropertiesPage(from, items, currentState.nextIndex);
+  await sendPropertiesPage(from, results, currentState.nextIndex);
   currentState.nextIndex += 5;
   break;
 }
@@ -1411,35 +1410,46 @@ case "awaiting_price_range_high": {
 
   currentState.filters.precio = { from: r.from, to: r.to };
 
-  const items = await searchProperties(currentState.filters);
-  if (!items || !items.length) {
-    await sendMessage(from, { type: 'text', text: { body: "😕 No encontré resultados con esos filtros." } });
-    delete userStates[numeroRemitente];
+    currentState.filters.precio = { from: range.from, to: range.to };
+
+  // BUSCAR y mostrar página 1
+  const results = await searchProperties(currentState.filters);
+  if (!results || !results.length) {
+    currentState.step = "awaiting_price_retry";
+    currentState.priceLevel = "main";
+    await sendMessage(from, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+        action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+      }
+    });
     break;
   }
 
   currentState.step = "showing_results";
-  currentState.results = items;
+  currentState.results = results;
   currentState.nextIndex = 0;
-  await sendPropertiesPage(from, items, currentState.nextIndex);
+  await sendPropertiesPage(from, results, currentState.nextIndex);
   currentState.nextIndex += 5;
+
   break;
 }
 
 // ===== Paginado: botón "Ver más" =====
 case "showing_results": {
   if (input === "props_more") {
-    const items = currentState.results || [];
+    const results = currentState.results || [];
     const idx = currentState.nextIndex || 0;
-    if (idx >= items.length) {
+    if (idx >= results.length) {
       await sendMessage(from, { type: 'text', text: { body: "No hay más resultados 🙂" } });
       delete userStates[numeroRemitente];
       break;
     }
-    await sendPropertiesPage(from, items, idx);
+    await sendPropertiesPage(from, results, idx);
     currentState.nextIndex = idx + 5;
   } else {
-    // Cualquier otra cosa, volvemos al menú
     delete userStates[numeroRemitente];
     await sendMainMenu(from);
   }
