@@ -347,7 +347,7 @@ async function transcribeAudioFromMeta(mediaId) {
     const form = new FormData();
     form.append("file", audioBuf, { filename: "audio.ogg", contentType });
     // Modelos válidos: "whisper-1" o "gpt-4o-mini-transcribe"
-    form.append("model", "gpt-4o-mini-transcribe");
+    form.append("model", "whisper-1");
 
     const asrRes = await axios.post(
       "https://api.openai.com/v1/audio/transcriptions",
@@ -1691,29 +1691,32 @@ case "awaiting_newconv_text": {
   const leadId = currentState.leadItemId;
   const raw = (input || "").trim();
   
+  // LOG 1: Ver qué texto se recibió (transcrito o escrito)
+  console.log("[DIAGNÓSTICO] Texto recibido para procesar:", raw);
+
   if (!raw) {
     await sendMessage(from, { type: 'text', text: { body: "🤏 No entendí o el audio estaba vacío. Por favor, enviá de nuevo el seguimiento en *texto o audio*, o escribí *cancelar*." } });
     break;
   }
 
-  // 1. Avisamos al usuario que estamos procesando
   await sendMessage(from, { type: 'text', text: { body: "🎙️ Analizando... Dame un momento para resumir y guardar en Podio." } });
 
-  // 2. ¡AQUÍ LA MAGIA! Usamos la función que ya tenés para resumir.
   const resumen = await summarizeWithOpenAI(raw);
   
-  // 3. Guardamos el resumen limpio en el campo de seguimiento.
+  // LOG 2: Ver el resultado del resumen
+  console.log("[DIAGNÓSTICO] Resultado del resumen de OpenAI:", resumen);
+
   const result = await appendToLeadSeguimiento(leadId, `Resumen conversación: ${resumen}`);
 
   if (result?.ok) {
     await sendMessage(from, { type: 'text', text: { body: "✅ ¡Listo! El resumen fue guardado en el seguimiento del lead." } });
   } else {
-    // 4. Si falla, guardamos el texto plano como fallback para no perder la info
+    // LOG 3: Ver qué se intentará guardar como fallback
+    console.log("[DIAGNÓSTICO] Falló el resumen. Intentando guardar transcripción cruda en Podio.");
     await appendToLeadSeguimiento(leadId, `Transcripción (sin resumir): ${raw}`);
     await sendMessage(from, { type: 'text', text: { body: "⚠️ No pude generar el resumen, pero guardé la transcripción completa para que no se pierda la información." } });
   }
 
-  // 5. Volvemos a la botonera del lead para seguir trabajando
   currentState.step = "update_lead_menu";
   const leadItem = await getLeadDetails(leadId);
   const nameField = (leadItem.fields || []).find(f => f.external_id === "contacto-2");
