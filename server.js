@@ -318,61 +318,56 @@ async function summarizeWithOpenAI(text) {
 
 // --- Transcripción de audio WhatsApp (Adaptada para Meta) ---
 async function transcribeAudioFromMeta(mediaId) {
+  const API_VERSION = 'v19.0';
   try {
-    const API_VERSION = 'v19.0';
-    const token = process.env.META_ACCESS_TOKEN;
-
-    // 1) Obtener URL del media en Meta
-    const metaInfo = await axios.get(
-      `https://graph.facebook.com/${API_VERSION}/${mediaId}`,
-      { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 }
-    );
-    const fileUrl = metaInfo.data?.url;
-    const mime = metaInfo.data?.mime_type || "audio/ogg";
-
-    if (!fileUrl) return { text: null, error: "no_media_url" };
-
-    // 2) Descargar binario del audio (requiere el mismo token)
-    const audioResp = await axios.get(fileUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-      responseType: "arraybuffer",
-      timeout: 60000
+    // 1) Pedir la media URL a Meta
+    const metaUrl = `https://graph.facebook.com/${API_VERSION}/${mediaId}`;
+    const metaRes = await axios.get(metaUrl, {
+      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
+      timeout: 20000
     });
-    const audioBuffer = Buffer.from(audioResp.data);
+    const mediaUrl = metaRes.data?.url;
+    if (!mediaUrl) {
+      console.error("META: url vacía en mediaId", mediaId, metaRes.data);
+      return { text: null, error: "no_media_url" };
+    }
+    console.log("[ASR] Media URL:", mediaUrl);
 
-    // Helper simple para extensión desde mime
-    const ext = (() => {
-      if (mime.includes("ogg")) return "ogg";
-      if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
-      if (mime.includes("aac")) return "aac";
-      if (mime.includes("m4a")) return "m4a";
-      if (mime.includes("wav")) return "wav";
-      return "ogg";
-    })();
+    // 2) Descargar el binario del audio (WhatsApp voice note suele ser OGG/opus)
+    const audioRes = await axios.get(mediaUrl, {
+      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
+      responseType: "arraybuffer",
+      timeout: 30000
+    });
+    const audioBuf = Buffer.from(audioRes.data);
+    const contentType = audioRes.headers["content-type"] || "audio/ogg";
+    console.log(`[ASR] Descargado ${audioBuf.length} bytes (${contentType})`);
 
-    // 3) Enviar a OpenAI (transcripción)
-    const fd = new FormData();
-    fd.append("file", audioBuffer, { filename: `audio.${ext}`, contentType: mime });
-    // Usar gpt-4o-transcribe; si tu cuenta no lo tiene habilitado, cambia a "whisper-1"
-    fd.append("model", "gpt-4o-transcribe");
+    // 3) Enviar a OpenAI para transcribir
+    const form = new FormData();
+    form.append("file", audioBuf, { filename: "audio.ogg", contentType });
+    // Modelos válidos: "whisper-1" o "gpt-4o-mini-transcribe"
+    form.append("model", "gpt-4o-mini-transcribe");
 
-    const { data } = await axios.post(
+    const asrRes = await axios.post(
       "https://api.openai.com/v1/audio/transcriptions",
-      fd,
+      form,
       {
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          ...fd.getHeaders()
+          ...form.getHeaders()
         },
-        timeout: 120000
+        timeout: 60000
       }
     );
 
-    const text = (data?.text || "").trim();
-    return { text, error: null };
-  } catch (e) {
-    console.error("Transcribe error:", e?.response?.data || e.message);
-    return { text: null, error: e?.response?.data || e.message };
+    const text = (asrRes.data?.text || "").trim();
+    console.log("[ASR] Texto transcrito:", text);
+    return { text };
+
+  } catch (err) {
+    console.error("ASR error:", err.response?.data || err.message);
+    return { text: null, error: err.response?.data || err.message };
   }
 }
 
@@ -1194,6 +1189,14 @@ app.post("/whatsapp", async (req, res) => {
 
     try {
         const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        console.log("[WHATSAPP] tipo:", message.type, "| from:", message.from);
+if (message.type === "audio") {
+  console.log("[WHATSAPP] audio.id:", message.audio?.id);
+}
+
+console.log("[INPUT] interactiveReplyId:", interactiveReplyId, "| userInput:", userInput);
+
+
         if (!message) return;
 
         const from = message.from;
@@ -1541,8 +1544,6 @@ case "awaiting_price_range_high": {
 
   currentState.filters.precio = { from: r.from, to: r.to };
 
-    currentState.filters.precio = { from: range.from, to: range.to };
-
   // BUSCAR y mostrar página 1
   const results = await searchProperties(currentState.filters);
   if (!results || !results.length) {
@@ -1673,7 +1674,7 @@ case "update_lead_menu": {
     await sendLeadUpdateMenu(from, leadName);
   } else if (id === "update_newconv") {
     currentState.step = "awaiting_newconv_text";
-    await sendMessage(from, { type: 'text', text: { body: "🗣️ Mandá *texto o audio* con un *resumen corto* (1–2 frases)." } });
+    await sendMessage(from, { type: 'text', text: { body: "🗣️ Mandá *texto o audio* con el seguimiento. Lo guardo *tal cual*." } });
   } else if (id === "update_visit") {
     currentState.step = "awaiting_visit_date";
     await sendMessage(from, { type: 'text', text: { body: "📅 Decime la *fecha* de la visita (AAAA-MM-DD). Podés agregar hora HH:MM." } });
@@ -1690,8 +1691,8 @@ case "awaiting_newconv_text": {
     await sendMessage(from, { type: 'text', text: { body: "🤏 No escuché/entendí. Mandá *texto o audio* con el resumen, o escribí *cancelar*." } });
     break;
   }
-  const resumen = await summarizeWithOpenAI(raw); // ya lo tenés implementado
-  const ok = await appendToLeadSeguimiento(leadId, `Nueva conversación: ${resumen}`);
+  const contenido = raw; // sin resumir
+const ok = await appendToLeadSeguimiento(leadId, `Nueva conversación: ${contenido}`);
   if (ok?.ok) {
     await sendMessage(from, { type: 'text', text: { body: "✅ Guardado en seguimiento." } });
   } else {
