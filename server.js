@@ -177,18 +177,20 @@ function formatResults(properties, startIndex, batchSize = 5) {
   batch.forEach((prop, index) => {
     const title = prop.title;
     const valorField = prop.fields.find(f => f.external_id === "valor-de-la-propiedad");
-    const localidadField = prop.fields.find(f => f.external_id === "localidad-texto-2");
-    const linkField = prop.fields.find(f => f.external_id === "enlace-texto-2");
+const localidadField = prop.fields.find(f => f.external_id === "localidad-texto-2");
+const linkField =
+  prop.fields.find(f => f.external_id === "enlace-texto-2") ||
+  prop.fields.find(f => f.external_id === "enlace"); // fallback
 
     const valor = valorField ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString("es-AR")}*` : "Valor no especificado";
     const localidadLimpia = localidadField ? localidadField.values[0].value.replace(/<[^>]*>?/gm, "") : "No especificada";
     const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
     let link = "Sin enlace web";
-    if (linkField && linkField.values[0].value) {
-      const match = linkField.values[0].value.match(/href=["'](https?:\/\/[^"']+)["']/);
-      if (match && match[1]) link = match[1];
-    }
+const raw = linkField?.values?.[0]?.value;
+// Soporta <a href="...">, texto plano con URL, o objetos con .url
+const url = extractFirstUrl(typeof raw === "string" ? raw : (raw?.url || ""));
+if (url) link = url;
 
     message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
     if (index < batch.length - 1) message += "\n\n----------\n\n";
@@ -261,6 +263,12 @@ async function appendToLeadSeguimiento(itemId, newLinePlain) {
   }
 }
 
+// Extrae la primera URL que encuentre (sirve si viene en <a ...> o texto plano)
+function extractFirstUrl(input) {
+  const s = (input || "").toString();
+  const m = s.match(/https?:\/\/[^\s"'<>]+/i);
+  return m ? m[0] : "";
+}
 
 
 /** Busca lead por teléfono o por item_id */
@@ -1167,10 +1175,20 @@ case "awaiting_contact_type": {
     const phoneToCheck = input.replace(/\D/g, "");
 
     // 1. MEJORA DEL MENSAJE DE ERROR
-        if (!isValidArMobile(phoneToCheck)) {
-        await sendMessage(from, { type: 'text', text: { body: "😕 Número inválido. Envíalo de nuevo *sin 0 ni 15* (10 dígitos)." } });
-        break;
-      }
+        if (!items || !items.length) {
+            currentState.step = "awaiting_price_retry";
+            currentState.priceLevel = "main";
+            await sendMessage(from, {
+                type: "interactive",
+                interactive: {
+                    type: "button",
+                    body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+                    action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+                }
+            });
+            break;
+          }
+
 
     console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
     const existingLeads = await searchLeadByPhone(phoneToCheck);
@@ -1361,10 +1379,19 @@ case "awaiting_price_range": {
   // BUSCAR y mostrar página 1
   const items = await searchProperties(currentState.filters);
   if (!items || !items.length) {
-    await sendMessage(from, { type: 'text', text: { body: "😕 No encontré resultados con esos filtros." } });
-    delete userStates[numeroRemitente];
-    break;
-  }
+  currentState.step = "awaiting_price_retry";
+  currentState.priceLevel = "high";
+  await sendMessage(from, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "😕 Sin resultados.\n¿Probar otro rango?" },
+      action: { buttons: [{ type: "reply", reply: { id: "price_retry", title: "🔁 Elegir otro rango" } }] }
+    }
+  });
+  break;
+}
+
 
   currentState.step = "showing_results";
   currentState.results = items;
@@ -1413,6 +1440,22 @@ case "showing_results": {
     currentState.nextIndex = idx + 5;
   } else {
     // Cualquier otra cosa, volvemos al menú
+    delete userStates[numeroRemitente];
+    await sendMainMenu(from);
+  }
+  break;
+}
+
+case "awaiting_price_retry": {
+  if (input === "price_retry") {
+    if (currentState.priceLevel === "high") {
+      currentState.step = "awaiting_price_range_high";
+      await sendHighPriceList(from);
+    } else {
+      currentState.step = "awaiting_price_range";
+      await sendPriceRangeList(from);
+    }
+  } else {
     delete userStates[numeroRemitente];
     await sendMainMenu(from);
   }
