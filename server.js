@@ -74,28 +74,26 @@ function buildPodioDateObject(input) {
 // Busca contacto por teléfono (búsqueda general). Si no existe, lo crea.
 async function findOrCreateContactByPhone(digits, senderWhatsApp) {
   const appId = process.env.PODIO_CONTACTOS_APP_ID;
-  const token = await getAppAccessTokenFor("contactos");
+  const token = await getAppAccessTokenFor('contactos');
 
   // 1) Intento: búsqueda libre por query (suele matchear teléfonos)
   try {
-    const { data } = await axios.post(
-      `https://api.podio.com/item/app/${appId}/filter/`,
-      { query: digits, limit: 1 },
-      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 }
-    );
-    const item = data?.items?.[0];
-    if (item?.item_id) return { item_id: item.item_id, created: false };
+    const found = await searchContactByPhone(digits);
+    if (found?.length) return { item_id: found[0].item_id, created: false };
   } catch (e) {
-    console.error("search contacto by query fail:", e.response?.data || e.message);
+    console.error('search contacto by query fail:', e.response?.data || e.message);
   }
 
   // 2) Crear contacto mínimo
   const vendedorId = VENDEDORES_CONTACTOS_MAP[senderWhatsApp] || VENDEDOR_POR_DEFECTO_ID;
-  const created = await createItemIn("contactos", cleanDeep({
-    title: "Contacto sin nombre",
-    phone: [{ type: "mobile", value: digits }],
-    "vendedor-asignado-2": [vendedorId],
-  }));
+  const created = await createItemIn(
+    'contactos',
+    cleanDeep({
+      title: 'Contacto sin nombre',
+      phone: [{ type: 'mobile', value: digits }],
+      'vendedor-asignado-2': [vendedorId],
+    }),
+  );
   return { item_id: created.item_id, created: true };
 }
 
@@ -328,13 +326,20 @@ async function findLeadByPhoneOrId(inputStr) {
   const onlyDigits = (inputStr || '').replace(/\D/g, '');
   if (!onlyDigits) return { ok: false, reason: 'empty' };
 
-  // Intentar por teléfono primero
+  // Teléfono AR: 10 dígitos → NO lo interpretes como ID
+  if (onlyDigits.length === 10) {
+    const found = await searchLeadByPhone(onlyDigits);
+    return found?.length ? { ok: true, leadItem: found[0] } : { ok: false, reason: 'not_found' };
+  }
+
+  // Primero intentar teléfono (otros largos)
   if (onlyDigits.length >= 9) {
     const found = await searchLeadByPhone(onlyDigits);
     if (found?.length) return { ok: true, leadItem: found[0] };
   }
-  // Intentar como item_id
-  if (onlyDigits.length >= 6) {
+
+  // Luego, y sólo si NO eran 10 dígitos, probar como item_id
+  if (onlyDigits.length >= 6 && onlyDigits.length !== 10) {
     const item = await getLeadDetails(Number(onlyDigits));
     if (item?.item_id) return { ok: true, leadItem: item };
   }
@@ -950,7 +955,7 @@ async function sendExpectativaList(to) {
               { id: 'exp_4', title: '🗓️ 3 meses' },
               { id: 'exp_6', title: '🗓️ + de 6 meses' },
               { id: 'exp_8', title: '🌫️ Indefinido' },
-              { id: 'exp_9', title: '🏡 Debe vender una propiedad' },
+              { id: 'exp_9', title: '🏡 Debe vender una prop.' },
             ],
           },
         ],
@@ -1127,11 +1132,7 @@ async function searchLeadByPhone(phoneNumber) {
   }
 }
 
-// --- Contactos: buscar por teléfono ---
-// Intenta por 'telefono-busqueda' (texto). Fallback: por campo phone (tipo phone).
-// --- Contactos: buscar por teléfono (robusto) ---
-// --- Contactos: buscar por teléfono (ULTRA robusto) ---
-// --- Contactos: buscar por teléfono (match ESTRICTO por phone) ---
+// --- Contactos: buscar por teléfono (query + match exacto por últimos 10) ---
 async function searchContactByPhone(phoneRaw) {
   const appId = process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor('contactos');
@@ -1139,8 +1140,7 @@ async function searchContactByPhone(phoneRaw) {
   const digits = (phoneRaw || '').replace(/\D/g, '');
   if (!digits) return [];
 
-  const core10 = digits.slice(-10); // lo que pedís al usuario: 10 dígitos sin 0/15
-
+  const core10 = digits.slice(-10);
   const variants = Array.from(
     new Set([
       core10,
@@ -1155,61 +1155,46 @@ async function searchContactByPhone(phoneRaw) {
   );
 
   const norm10 = s => (s || '').toString().replace(/\D/g, '').slice(-10);
-  const postFilterExact = items =>
+  const exactByPhone = items =>
     (items || []).filter(it => {
       const pf = (it.fields || []).find(f => f.external_id === 'phone');
       const list = pf?.values || [];
       return list.some(p => norm10(p?.value) === core10);
     });
 
-  const tryFilter = async (body, tag) => {
+  const tryQuery = async q => {
     try {
-      const r = await axios.post(`https://api.podio.com/item/app/${appId}/filter/`, body, {
-        headers: { Authorization: `OAuth2 ${token}` },
-        timeout: 20000,
-      });
+      const r = await axios.post(
+        `https://api.podio.com/item/app/${appId}/filter/`,
+        { query: q, limit: 50 }, // query global
+        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
+      );
       return r.data?.items || [];
     } catch (e) {
-      console.error(`contact phone filter (${tag}) fail:`, e.response?.data || e.message);
+      console.error('contact query fail:', e.response?.data || e.message);
       return [];
     }
   };
 
-  // 1) Filtro por phone con objetos {type,value}
-  let hits = await tryFilter(
-    { filters: { phone: variants.map(v => ({ type: 'mobile', value: v })) }, limit: 25 },
-    'type+value',
-  );
-  hits = postFilterExact(hits);
-  if (hits.length) return hits;
+  // 1) Probar varias variantes de query y filtrar localmente por igualdad exacta (últimos 10)
+  for (const q of variants) {
+    const hits = exactByPhone(await tryQuery(q));
+    if (hits.length) return hits;
+  }
 
-  // 2) Filtro por phone con objetos {value}
-  hits = await tryFilter(
-    { filters: { phone: variants.map(v => ({ value: v })) }, limit: 25 },
-    'value-only',
-  );
-  hits = postFilterExact(hits);
-  if (hits.length) return hits;
-
-  // 3) Filtro por phone con array de strings (algunas apps lo aceptan)
-  hits = await tryFilter({ filters: { phone: variants }, limit: 25 }, 'strings');
-  hits = postFilterExact(hits);
-  if (hits.length) return hits;
-
-  // 4) Fallback: escaneo acotado y chequeo local (SOLO campo phone)
+  // 2) Fallback: traer últimos N y filtrar localmente por phone
   try {
     const r = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
       { limit: 200, sort_by: 'created_on', sort_desc: true },
       { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
     );
-    return postFilterExact(r.data?.items || []);
+    return exactByPhone(r.data?.items || []);
   } catch (e) {
-    console.error('contact phone fallback scan fail:', e.response?.data || e.message);
+    console.error('contact fallback scan fail:', e.response?.data || e.message);
     return [];
   }
 }
-
 
 // ----------------------------------------
 // Contactos - meta & creación
@@ -2154,7 +2139,6 @@ app.post('/whatsapp', async (req, res) => {
           }
           currentState.leadDraft.expectativa = EXPECTATIVA_MAP[m[0]];
 
-          // 🧩 Crear el Lead en Podio
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
             const fields = {
@@ -2167,31 +2151,23 @@ app.post('/whatsapp', async (req, res) => {
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
               seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
-
             const created = await createItemIn('leads', fields);
+
+            // Guardamos el id del lead y pedimos el audio/texto
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+            delete currentState.lastInputType;
 
             await sendMessage(from, {
               type: 'text',
               text: { body: '✅ *Lead creado y vinculado al contacto.*' },
             });
-
-            // 👉 No volvemos al menú de “Actualizar Lead”.
-            // Ofrecemos opciones generales:
             await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Necesitás algo más?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'post_back_menu', title: '🏠 Menú principal' } },
-                    { type: 'reply', reply: { id: 'post_cancel', title: '❌ Nada más' } },
-                  ],
-                },
+              type: 'text',
+              text: {
+                body: '🎙️ Ahora dejame *un audio* (o texto) con lo conversado con el cliente. Lo agrego al seguimiento.',
               },
             });
-
-            delete userStates[numeroRemitente];
           } catch (e) {
             console.error('Error creando Lead:', e.response?.data || e.message);
             await sendMessage(from, {
@@ -2200,6 +2176,59 @@ app.post('/whatsapp', async (req, res) => {
             });
             delete userStates[numeroRemitente];
           }
+          break;
+        }
+
+        case 'awaiting_newlead_voice': {
+          const leadId = currentState.leadItemId;
+          const raw = (input || '').trim();
+          const kind = currentState.lastInputType || 'text'; // 'audio' o 'text'
+
+          if (!raw) {
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🤏 No entendí o el audio vino vacío. Probá de nuevo, o escribí *cancelar*.',
+              },
+            });
+            break;
+          }
+
+          await sendMessage(from, {
+            type: 'text',
+            text: {
+              body:
+                kind === 'audio'
+                  ? '🎙️ Analizando y resumiendo…'
+                  : '📝 Guardando en el seguimiento…',
+            },
+          });
+
+          let toSave = raw;
+          if (kind === 'audio') {
+            try {
+              const resumen = await summarizeWithOpenAI(raw);
+              if (resumen && resumen.trim()) toSave = resumen.trim();
+            } catch (e) {
+              console.error('[Seguimiento] resumen fail:', e.message);
+            }
+          }
+
+          const r = await appendToLeadSeguimiento(leadId, toSave);
+          if (!r.ok) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude guardar el seguimiento. Avisá al administrador.' },
+            });
+          } else {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ Guardado en el seguimiento del lead.' },
+            });
+          }
+
+          currentState.step = 'after_update_options';
+          await sendAfterUpdateOptions(from);
           break;
         }
 
