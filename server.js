@@ -53,22 +53,43 @@ function addHours(timeStr, hoursToAdd = 1) {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** Construye objeto de fecha para Podio (solo fecha, sin hora) */
-function buildPodioDateObject(input) {
+/** Construye objeto fecha/fecha-hora para Podio.
+ *  - Si wantsRange=true, agrega end_* igual a start_* (1h más si hay hora).
+ *  - Acepta 'YYYY-MM-DD' o 'YYYY-MM-DD HH:MM[:SS]' o Date.
+ */
+function buildPodioDateObject(input, wantsRange = false) {
   if (!input) return undefined;
-  let startDate;
 
+  let date, time;
   if (input instanceof Date) {
-    startDate = input.toISOString().substring(0, 10);
+    const d = new Date(input.getTime() - input.getTimezoneOffset() * 60000);
+    const iso = d.toISOString();
+    date = iso.slice(0, 10);
+    time = iso.slice(11, 19);
   } else if (typeof input === 'string') {
-    const parts = splitDateTime(input);
-    if (parts) startDate = parts.date;
-  } else if (typeof input === 'object' && input.start_date) {
-    startDate = input.start_date;
+    const p = splitDateTime(input);
+    if (p) {
+      date = p.date;
+      time = p.time !== '00:00:00' ? p.time : undefined;
+    }
+  } else if (typeof input === 'object' && (input.start_date || input.start_time)) {
+    return input; // ya viene armado
   }
 
-  if (!startDate) return undefined;
-  return { start_date: startDate };
+  if (!date) return undefined;
+
+  if (time) {
+    const out = { start_date: date, start_time: time };
+    if (wantsRange) {
+      out.end_date = date;
+      out.end_time = addHours(time, 1);
+    }
+    return out;
+  } else {
+    const out = { start_date: date };
+    if (wantsRange) out.end_date = date;
+    return out;
+  }
 }
 
 // Busca contacto por teléfono (búsqueda general). Si no existe, lo crea.
@@ -1052,11 +1073,17 @@ async function updateLeadDate(itemId, inputStr) {
     const parts = splitDateTime(inputStr); // {date, time}
     if (!parts?.date) return { ok: false, error: 'Fecha inválida' };
 
-    await axios.put(
-      `https://api.podio.com/item/${itemId}/value/${dateExternalId}`,
-      [{ value: { start_date: parts.date } }],
-      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
-    );
+    const wantRange = (dateFieldMeta?.config?.settings?.end || 'disabled') !== 'disabled';
+    const value =
+      parts.time && parts.time !== '00:00:00'
+        ? buildPodioDateObject(`${parts.date} ${parts.time}`, wantRange)
+        : buildPodioDateObject(parts.date, wantRange);
+
+    await axios.put(`https://api.podio.com/item/${itemId}/value/${dateExternalId}`, [{ value }], {
+      headers: { Authorization: `OAuth2 ${token}` },
+      timeout: 20000,
+    });
+
     // Dejar registro simple en seguimiento
     const tt = parts.time && parts.time !== '00:00:00' ? ` ${parts.time.slice(0, 5)}hs` : '';
     await appendToLeadSeguimiento(itemId, `Visita agendada para ${parts.date}${tt}`);
@@ -2141,6 +2168,14 @@ app.post('/whatsapp', async (req, res) => {
 
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+
+            // ⬇️ Detectar el campo fecha de Leads y si es “range”
+            const meta = await getLeadsFieldsMeta();
+            const df = meta.find(f => f.type === 'date');
+            const dateExternalId =
+              process.env.PODIO_LEADS_DATE_EXTERNAL_ID || (df ? df.external_id : null);
+            const wantsRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+
             const fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
@@ -2151,7 +2186,26 @@ app.post('/whatsapp', async (req, res) => {
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
               seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
+
+            // ⬇️ Enviar fecha “hoy”; si el campo exige rango, mandamos range válido
+            if (dateExternalId) {
+              fields[dateExternalId] = buildPodioDateObject(new Date(), wantsRange);
+            }
+
             const created = await createItemIn('leads', fields);
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+            });
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🎙️ Dejá *un audio* breve con lo conversado. Lo guardo en el seguimiento.',
+              },
+            });
 
             // Guardamos el id del lead y pedimos el audio/texto
             currentState.leadItemId = created.item_id;
@@ -2549,6 +2603,50 @@ app.post('/whatsapp', async (req, res) => {
           } else {
             await sendAfterUpdateOptions(from);
           }
+          break;
+        }
+
+        case 'awaiting_newlead_voice': {
+          const leadId = currentState.leadItemId;
+          const raw = (input || '').trim();
+          const kind = currentState.lastInputType || 'text'; // 'audio' o 'text'
+
+          if (!raw) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '🤏 No se entendió. Probá de nuevo o escribí *cancelar*.' },
+            });
+            break;
+          }
+
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: kind === 'audio' ? '🎧 Procesando…' : '📝 Guardando…' },
+          });
+
+          let toSave = raw;
+          if (kind === 'audio') {
+            try {
+              const resumen = await summarizeWithOpenAI(raw);
+              if (resumen?.trim()) toSave = resumen.trim();
+            } catch (e) {
+              console.error('[Seguimiento] resumen fail:', e.message);
+            }
+          }
+
+          const r = await appendToLeadSeguimiento(leadId, toSave);
+          await sendMessage(from, {
+            type: 'text',
+            text: {
+              body: r.ok
+                ? '✅ Quedó guardado en *Seguimiento*.'
+                : '❌ No pude guardar. Avisá al administrador.',
+            },
+          });
+
+          delete currentState.lastInputType;
+          currentState.step = 'after_update_options';
+          await sendAfterUpdateOptions(from);
           break;
         }
 
