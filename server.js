@@ -1129,32 +1129,62 @@ async function searchLeadByPhone(phoneNumber) {
 
 // --- Contactos: buscar por teléfono ---
 // Intenta por 'telefono-busqueda' (texto). Fallback: por campo phone (tipo phone).
-async function searchContactByPhone(phoneDigits) {
+// --- Contactos: buscar por teléfono (robusto) ---
+async function searchContactByPhone(phoneRaw) {
   const appId = process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor('contactos');
 
-  // 1) por texto 'telefono-busqueda' (si existe en tu app de Contactos)
+  const d = (phoneRaw || '').replace(/\D/g, '');
+  if (!d) return [];
+
+  // Variantes comunes en AR
+  const variants = Array.from(
+    new Set([
+      d,
+      d.startsWith('0') ? d : '0' + d, // 0 + 10 dígitos
+      d.startsWith('15') ? d : '15' + d, // 15 + 10 dígitos
+      '549' + d,
+      '+549' + d,
+    ]),
+  );
+
+  // 0) Búsqueda libre (suele ser la más tolerante)
+  for (const q of variants) {
+    try {
+      const r = await axios.post(
+        `https://api.podio.com/item/app/${appId}/filter/`,
+        { query: q, limit: 5 },
+        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 },
+      );
+      if (r.data?.items?.length) return r.data.items;
+    } catch (_) {}
+  }
+
+  // 1) Filtro por phone: sólo value
   try {
     const r1 = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
-      { filters: { 'telefono-busqueda': phoneDigits } },
+      { filters: { phone: variants.map(v => ({ value: v })) }, limit: 5 },
       { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 },
     );
     if (r1.data?.items?.length) return r1.data.items;
-  } catch (_) {} // sigue al fallback
+  } catch (e) {
+    console.error('contact phone filter (value) fail:', e.response?.data || e.message);
+  }
 
-  // 2) fallback por campo 'phone' (tipo phone)
+  // 2) Filtro por phone: con type=mobile
   try {
     const r2 = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
-      { filters: { phone: [{ value: phoneDigits }] } },
+      { filters: { phone: variants.map(v => ({ type: 'mobile', value: v })) }, limit: 5 },
       { headers: { Authorization: `OAuth2 ${token}` }, timeout: 15000 },
     );
-    return r2.data.items || [];
-  } catch (err) {
-    console.error('Error buscando contacto por teléfono:', err.response?.data || err.message);
-    return [];
+    if (r2.data?.items?.length) return r2.data.items;
+  } catch (e) {
+    console.error('contact phone filter (type+value) fail:', e.response?.data || e.message);
   }
+
+  return [];
 }
 
 // ----------------------------------------
@@ -1741,7 +1771,7 @@ app.post('/whatsapp', async (req, res) => {
             await sendOriginList(from);
             break;
           }
-          const key = m[1]; // "1" .. "11"
+          const key = m[1]; // "1" .. "10"
           const origenId = ORIGEN_CONTACTO_MAP[key];
           if (!origenId) {
             await sendOriginList(from);
@@ -1749,10 +1779,10 @@ app.post('/whatsapp', async (req, res) => {
           }
 
           currentState.data['contact-type'] = [origenId];
+
           const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
           currentState.data['vendedor-asignado-2'] = [vendedorId];
           currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
-          delete currentState.data['telefono-busqueda'];
 
           try {
             await createItemIn('contactos', currentState.data);
@@ -1760,13 +1790,17 @@ app.post('/whatsapp', async (req, res) => {
               type: 'text',
               text: { body: '🎉 Contacto creado y asignado.' },
             });
+
+            // 👇 NUEVO: ofrecer “Algo más / Cancelar”
+            currentState.step = 'post_results_options';
+            await sendPostResultsOptions(from);
           } catch (e) {
             await sendMessage(from, {
               type: 'text',
               text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
             });
+            delete userStates[numeroRemitente];
           }
-          delete userStates[numeroRemitente];
           break;
         }
 
