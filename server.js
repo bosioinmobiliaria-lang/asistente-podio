@@ -1131,29 +1131,38 @@ async function searchLeadByPhone(phoneNumber) {
 // Intenta por 'telefono-busqueda' (texto). Fallback: por campo phone (tipo phone).
 // --- Contactos: buscar por teléfono (robusto) ---
 // --- Contactos: buscar por teléfono (ULTRA robusto) ---
+// --- Contactos: buscar por teléfono (match ESTRICTO por phone) ---
 async function searchContactByPhone(phoneRaw) {
   const appId = process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor('contactos');
 
-  const d = (phoneRaw || '').replace(/\D/g, '');
-  if (!d) return [];
+  const digits = (phoneRaw || '').replace(/\D/g, '');
+  if (!digits) return [];
 
-  // Variantes frecuentes en AR (+54 9 / 54 9 / 0 / 15 / simple)
+  const core10 = digits.slice(-10); // lo que pedís al usuario: 10 dígitos sin 0/15
+
   const variants = Array.from(
     new Set([
-      d,
-      d.startsWith('0') ? d : '0' + d,
-      d.startsWith('15') ? d : '15' + d,
-      '54' + d,
-      '549' + d,
-      '+54' + d,
-      '+549' + d,
+      core10,
+      digits,
+      '0' + core10,
+      '15' + core10,
+      '54' + core10,
+      '549' + core10,
+      '+54' + core10,
+      '+549' + core10,
     ]),
   );
 
-  const last7 = d.slice(-7); // útil si en Podio quedó guardado con prefijos
+  const norm10 = s => (s || '').toString().replace(/\D/g, '').slice(-10);
+  const postFilterExact = items =>
+    (items || []).filter(it => {
+      const pf = (it.fields || []).find(f => f.external_id === 'phone');
+      const list = pf?.values || [];
+      return list.some(p => norm10(p?.value) === core10);
+    });
 
-  const tryFilter = async (body, label) => {
+  const tryFilter = async (body, tag) => {
     try {
       const r = await axios.post(`https://api.podio.com/item/app/${appId}/filter/`, body, {
         headers: { Authorization: `OAuth2 ${token}` },
@@ -1161,49 +1170,40 @@ async function searchContactByPhone(phoneRaw) {
       });
       return r.data?.items || [];
     } catch (e) {
-      console.error(`contact phone filter (${label}) fail:`, e.response?.data || e.message);
+      console.error(`contact phone filter (${tag}) fail:`, e.response?.data || e.message);
       return [];
     }
   };
 
-  // 0) query por variantes + sufijo (7 dígitos)
-  for (const q of [...variants, last7].filter(Boolean)) {
-    const hits = await tryFilter({ query: q, limit: 5 }, `query:${q}`);
-    if (hits.length) return hits;
-  }
+  // 1) Filtro por phone con objetos {type,value}
+  let hits = await tryFilter(
+    { filters: { phone: variants.map(v => ({ type: 'mobile', value: v })) }, limit: 25 },
+    'type+value',
+  );
+  hits = postFilterExact(hits);
+  if (hits.length) return hits;
 
-  // 1) filtro por phone usando strings simples (algunas cuentas lo esperan así)
-  {
-    const hits = await tryFilter({ filters: { phone: variants }, limit: 5 }, 'strings');
-    if (hits.length) return hits;
-  }
+  // 2) Filtro por phone con objetos {value}
+  hits = await tryFilter(
+    { filters: { phone: variants.map(v => ({ value: v })) }, limit: 25 },
+    'value-only',
+  );
+  hits = postFilterExact(hits);
+  if (hits.length) return hits;
 
-  // 2) filtro por phone usando objetos {type,value} (otra variante soportada)
-  {
-    const hits = await tryFilter(
-      { filters: { phone: variants.map(v => ({ type: 'mobile', value: v })) }, limit: 5 },
-      'type+value',
-    );
-    if (hits.length) return hits;
-  }
+  // 3) Filtro por phone con array de strings (algunas apps lo aceptan)
+  hits = await tryFilter({ filters: { phone: variants }, limit: 25 }, 'strings');
+  hits = postFilterExact(hits);
+  if (hits.length) return hits;
 
-  // 3) Fallback: escaneo rápido de últimos N y match local por dígitos
+  // 4) Fallback: escaneo acotado y chequeo local (SOLO campo phone)
   try {
     const r = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
-      { limit: 100, sort_by: 'created_on', sort_desc: true },
+      { limit: 200, sort_by: 'created_on', sort_desc: true },
       { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
     );
-    const items = r.data?.items || [];
-    const match = items.find(it => {
-      const pf = (it.fields || []).find(f => f.external_id === 'phone');
-      const list = pf?.values || [];
-      return list.some(p => {
-        const val = (p?.value || '').toString().replace(/\D/g, '');
-        return val.endsWith(d) || variants.includes(val);
-      });
-    });
-    return match ? [match] : [];
+    return postFilterExact(r.data?.items || []);
   } catch (e) {
     console.error('contact phone fallback scan fail:', e.response?.data || e.message);
     return [];
