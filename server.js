@@ -87,6 +87,89 @@ function buildPodioDateObject(input, wantRange = false) {
   }
 }
 
+// Devuelve YYYY-MM-DD y HH:MM:SS (si existiera)
+function splitStamp(input) {
+  if (!input) return { date: null, time: null };
+  if (input instanceof Date) return { date: input.toISOString().slice(0,10), time: '00:00:00' };
+  if (typeof input === 'string') {
+    const s = input.replace('T',' ').trim();
+    const [d, t] = s.split(/\s+/);
+    return { date: d || null, time: (t || '00:00:00') };
+  }
+  if (typeof input === 'object') {
+    if (input.start) {
+      const [d, t='00:00:00'] = input.start.split(' ');
+      return { date: d, time: t };
+    }
+    if (input.start_date) return { date: input.start_date, time: null };
+  }
+  return { date: null, time: null };
+}
+
+// Construye SIEMPRE un ARRAY con el objeto de fecha correcto para crear items
+function buildPodioDateForCreate(dfMeta, value = new Date()) {
+  const { date: ymd, time: hhmmss } = splitStamp(value);
+  const wantRange = (dfMeta?.config?.settings?.end  || 'disabled') !== 'disabled';
+  const wantTime  = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+  const stamp = `${ymd} ${hhmmss || '00:00:00'}`;
+
+  if (wantTime) {
+    return wantRange ? [{ start: stamp, end: stamp }] : [{ start: stamp }];
+  } else {
+    return wantRange ? [{ start_date: ymd, end_date: ymd }] : [{ start_date: ymd }];
+  }
+}
+
+// Normaliza TODAS las fechas que vayan en el payload de creación de LEADS.
+// - Convierte objetos sueltos a array
+// - Convierte "start_date"↔"start" según si el campo usa hora
+// - Si el campo es requerido y no viene → pone HOY.
+function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
+  const out = { ...(fields || {}) };
+  const dates = (leadsMeta || []).filter(f => f.type === 'date');
+
+  for (const df of dates) {
+    const ext = df.external_id;
+    let v = out[ext];
+
+    // Si falta y es requerido → HOY
+    if (!v && df.config?.required) {
+      out[ext] = buildPodioDateForCreate(df, new Date());
+      continue;
+    }
+
+    if (!v) continue;
+
+    // Aceptá varias formas y convertí a ARRAY de 1
+    if (Array.isArray(v)) {
+      // Si vino como [{ value: {...} }] lo aplanamos
+      if (v.length === 1 && v[0] && typeof v[0] === 'object' && v[0].value) v = [v[0].value];
+    } else {
+      v = [v];
+    }
+
+    const wantRange = (df.config?.settings?.end  || 'disabled') !== 'disabled';
+    const wantTime  = (df.config?.settings?.time || 'disabled') !== 'disabled';
+
+    const fixed = v.map(x => {
+      const { date: ymd, time: hhmmss } = splitStamp(x);
+
+      if (wantTime) {
+        const st = `${ymd} ${hhmmss || '00:00:00'}`;
+        return wantRange ? { start: st, end: x.end || st } : { start: st };
+      } else {
+        return wantRange
+          ? { start_date: ymd, end_date: x.end_date || ymd }
+          : { start_date: ymd };
+      }
+    });
+
+    out[ext] = fixed;
+  }
+
+  return out;
+}
+
 // Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto.
 // Respeta si el campo usa rango (start/end o start_date/end_date) y si usa hora.
 function buildPodioDateForCreate(dfMeta, when = new Date()) {
@@ -1126,12 +1209,19 @@ async function createItemIn(appName, fields) {
     appName === 'leads' ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor(appName);
 
-  const payload = { fields: cleanDeep(fields) };
+  let payloadFields = cleanDeep(fields);
 
-  const { data } = await axios.post(`https://api.podio.com/item/app/${appId}/`, payload, {
-    headers: { Authorization: `OAuth2 ${token}` },
-    timeout: 30000,
-  });
+  if (appName === 'leads') {
+    const leadsMeta = await getLeadsFieldsMeta();
+    payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
+    console.log('[LEADS] Payload FECHAS normalizado →', JSON.stringify(payloadFields, null, 2));
+  }
+
+  const { data } = await axios.post(
+    `https://api.podio.com/item/app/${appId}/`,
+    { fields: payloadFields },
+    { headers: { Authorization: `OAuth2 ${token}` }, timeout: 30000 },
+  );
   return data;
 }
 
@@ -1362,8 +1452,8 @@ app.post('/leads', async (req, res) => {
       seguimiento: seguimiento || undefined,
       ...(extras && typeof extras === 'object' ? extras : {}),
     });
-    if (dateExternalId && fecha) {
-      fields[dateExternalId] = buildPodioDateObject(fecha, wantRange);
+    if (dateExternalId) {
+      fields[dateExternalId] = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
     }
     const created = await createItemIn('leads', fields);
     res.status(201).json({ ok: true, item_id: created.item_id, message: 'Lead creado en Podio' });
@@ -1410,8 +1500,8 @@ app.post('/debug/leads/payload', async (req, res) => {
       seguimiento: seguimiento || undefined,
       ...(extras && typeof extras === 'object' ? extras : {}),
     });
-    if (dateExternalId && fecha) {
-      fields[dateExternalId] = buildPodioDateObject(fecha, wantRange);
+    if (dateExternalId) {
+      fields[dateExternalId] = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
     }
     res.json({ wouldSend: { fields }, dateExternalId, wantRange });
   } catch (err) {
@@ -2214,6 +2304,11 @@ app.post('/whatsapp', async (req, res) => {
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
               seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
+
+            // ⬅️ Asegurar fecha válida según meta (con o sin rango / hora)
+            if (dateExternalId && !fields[dateExternalId]) {
+              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
+            }
 
             // Fecha obligatoria (hoy). Si el campo exige range → start+end válidos
             if (dateExternalId) {
