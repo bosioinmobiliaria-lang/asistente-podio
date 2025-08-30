@@ -242,6 +242,26 @@ function formatPodioDate(dateString) {
   }
 }
 
+function forceRangeDate(input) {
+  // Acepta Date o string "YYYY-MM-DD" o "YYYY-MM-DD HH:MM:SS"
+  let date = null,
+    time = '00:00:00';
+  if (input instanceof Date) {
+    date = input.toISOString().slice(0, 10);
+  } else if (typeof input === 'string') {
+    const s = input.replace('T', ' ').trim();
+    const [d, t = '00:00:00'] = s.split(/\s+/);
+    date = d;
+    time = t;
+  }
+  if (!date) return undefined;
+
+  // Devolvemos SIEMPRE rango (start+end). Si hay hora, usamos start/end; si no, start_date/end_date
+  const hasTime = time !== '00:00:00';
+  if (hasTime) return { start: `${date} ${time}`, end: `${date} ${time}` };
+  return { start_date: date, end_date: date };
+}
+
 // --- Timestamp "AAAA-MM-DD HH:MM:SS" (hora local del server) ---
 function nowStamp(tz = 'America/Argentina/Buenos_Aires') {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -2312,7 +2332,7 @@ app.post('/whatsapp', async (req, res) => {
 
             // Fecha obligatoria (hoy). Si el campo exige range → start+end válidos
             if (dateExternalId) {
-              fields[dateExternalId] = buildPodioDateObject(new Date(), wantsRange);
+              fields[dateExternalId] = forceRangeDate(new Date());
             }
 
             const created = await createItemIn('leads', fields);
