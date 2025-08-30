@@ -87,6 +87,21 @@ function buildPodioDateObject(input, wantRange = false) {
   }
 }
 
+// Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto.
+// Respeta si el campo usa rango (start/end o start_date/end_date) y si usa hora.
+function buildPodioDateForCreate(dfMeta, when = new Date()) {
+  const ymd = when.toISOString().slice(0, 10);
+  const wantRange = (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
+  const wantTime  = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+
+  if (wantTime) {
+    const stamp = `${ymd} 00:00:00`;
+    return wantRange ? [{ start: stamp, end: stamp }] : [{ start: stamp }];
+  } else {
+    return wantRange ? [{ start_date: ymd, end_date: ymd }] : [{ start_date: ymd }];
+  }
+}
+
 // Busca contacto por teléfono (búsqueda general). Si no existe, lo crea.
 async function findOrCreateContactByPhone(digits, senderWhatsApp) {
   const appId = process.env.PODIO_CONTACTOS_APP_ID;
@@ -1069,12 +1084,20 @@ async function updateLeadDate(itemId, inputStr) {
     if (!parts?.date) return { ok: false, error: 'Fecha inválida' };
 
     const wantRange = (dateFieldMeta?.config?.settings?.end || 'disabled') !== 'disabled';
-    const value =
-      parts.time && parts.time !== '00:00:00'
-        ? buildPodioDateObject(`${parts.date} ${parts.time}`, wantRange)
-        : buildPodioDateObject(parts.date, wantRange);
+    const wantTime = (dateFieldMeta?.config?.settings?.time || 'disabled') !== 'disabled';
 
-    await axios.put(`https://api.podio.com/item/${itemId}/value/${dateExternalId}`, [{ value }], {
+    let value;
+    if (wantTime) {
+      const stamp = `${parts.date} ${parts.time || '00:00:00'}`;
+      value = wantRange ? { start: stamp, end: stamp } : { start: stamp };
+    } else {
+      value = wantRange
+        ? { start_date: parts.date, end_date: parts.date }
+        : { start_date: parts.date };
+    }
+
+    // 👇 IMPORTANTE: el body es un ARRAY con el objeto (no { value: ... })
+    await axios.put(`https://api.podio.com/item/${itemId}/value/${dateExternalId}`, [value], {
       headers: { Authorization: `OAuth2 ${token}` },
       timeout: 20000,
     });
@@ -1102,14 +1125,13 @@ async function createItemIn(appName, fields) {
   const appId =
     appName === 'leads' ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor(appName);
-  const { data } = await axios.post(
-    `https://api.podio.com/item/app/${appId}/`,
-    { fields },
-    {
-      headers: { Authorization: `OAuth2 ${token}` },
-      timeout: 30000, // Aumenta el tiempo de espera a 30 segundos
-    },
-  );
+
+  const payload = { fields: cleanDeep(fields) };
+
+  const { data } = await axios.post(`https://api.podio.com/item/app/${appId}/`, payload, {
+    headers: { Authorization: `OAuth2 ${token}` },
+    timeout: 30000,
+  });
   return data;
 }
 
@@ -2547,18 +2569,53 @@ app.post('/whatsapp', async (req, res) => {
           currentState.newLead['ideal-time-frame-of-sale'] = [id];
 
           const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-          const phone = currentState.newLead.phoneDigits;
-          const contactoId = currentState.newLead.contactoId;
 
-          const fields = cleanDeep({
-            'contacto-2': contactoId ? [{ item_id: contactoId }] : undefined,
-            'telefono-2': [{ type: 'mobile', value: phone }],
+          // 1) Tomar meta del campo fecha
+          const meta = await getLeadsFieldsMeta();
+          const df = (() => {
+            const dates = (meta || []).filter(f => f.type === 'date');
+            if (!dates.length) return null;
+            const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
+            if (env) return dates.find(f => f.external_id === env) || dates[0];
+            const required = dates.find(f => !!f.config?.required);
+            return required || dates[0];
+          })();
+          const dateExternalId = df?.external_id || null;
+
+          // 2) Campos del Lead
+          const fields = {
+            'contacto-2': [{ item_id: currentState.contactItemId }],
+            'telefono-busqueda': currentState.tempPhoneDigits,
             'vendedor-asignado-2': [vendedorId],
-            'lead-status': currentState.newLead['lead-status'],
-            'presupuesto-2': currentState.newLead['presupuesto-2'],
-            busca: currentState.newLead['busca'],
-            'ideal-time-frame-of-sale': currentState.newLead['ideal-time-frame-of-sale'],
-            // opcional: "seguimiento": `[${nowStamp()}] Lead creado desde WhatsApp`,
+            'lead-status': [currentState.leadDraft.inquietud],
+            'presupuesto-2': [currentState.leadDraft.presupuesto],
+            busca: [currentState.leadDraft.busca],
+            'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+            seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+          };
+
+          // 3) Fecha (hoy) en el FORMATO QUE PODIO ACEPTA PARA CREACIÓN (array)
+          if (dateExternalId) {
+            fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
+          }
+
+          // 4) Crear
+          const created = await createItemIn('leads', cleanDeep(fields));
+
+          // 5) Siguiente paso: pedir audio
+          currentState.leadItemId = created.item_id;
+          currentState.step = 'awaiting_newlead_voice';
+          delete currentState.lastInputType;
+
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+          });
+          await sendMessage(from, {
+            type: 'text',
+            text: {
+              body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
+            },
           });
 
           try {
