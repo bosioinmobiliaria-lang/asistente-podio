@@ -1187,6 +1187,7 @@ async function searchContactByPhone(phoneRaw) {
   return [];
 }
 
+
 // ----------------------------------------
 // Contactos - meta & creación
 // ----------------------------------------
@@ -1771,7 +1772,7 @@ app.post('/whatsapp', async (req, res) => {
             await sendOriginList(from);
             break;
           }
-          const key = m[1]; // "1" .. "10"
+          const key = m[1]; // "1" .. "11"
           const origenId = ORIGEN_CONTACTO_MAP[key];
           if (!origenId) {
             await sendOriginList(from);
@@ -1779,10 +1780,10 @@ app.post('/whatsapp', async (req, res) => {
           }
 
           currentState.data['contact-type'] = [origenId];
-
           const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
           currentState.data['vendedor-asignado-2'] = [vendedorId];
           currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+          delete currentState.data['telefono-busqueda'];
 
           try {
             await createItemIn('contactos', currentState.data);
@@ -1790,17 +1791,13 @@ app.post('/whatsapp', async (req, res) => {
               type: 'text',
               text: { body: '🎉 Contacto creado y asignado.' },
             });
-
-            // 👇 NUEVO: ofrecer “Algo más / Cancelar”
-            currentState.step = 'post_results_options';
-            await sendPostResultsOptions(from);
           } catch (e) {
             await sendMessage(from, {
               type: 'text',
               text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
             });
-            delete userStates[numeroRemitente];
           }
+          delete userStates[numeroRemitente];
           break;
         }
 
