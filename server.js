@@ -53,42 +53,37 @@ function addHours(timeStr, hoursToAdd = 1) {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** Construye objeto fecha/fecha-hora para Podio.
- *  - Si wantsRange=true, agrega end_* igual a start_* (1h más si hay hora).
- *  - Acepta 'YYYY-MM-DD' o 'YYYY-MM-DD HH:MM[:SS]' o Date.
- */
-function buildPodioDateObject(input, wantsRange = false) {
+/** Construye objeto de fecha para Podio; soporta fecha simple o rango. */
+function buildPodioDateObject(input, wantRange = false) {
   if (!input) return undefined;
 
-  let date, time;
+  // Normalizamos a { date, time }
+  let date = null,
+    time = '00:00:00';
+
   if (input instanceof Date) {
-    const d = new Date(input.getTime() - input.getTimezoneOffset() * 60000);
-    const iso = d.toISOString();
-    date = iso.slice(0, 10);
-    time = iso.slice(11, 19);
+    date = input.toISOString().slice(0, 10);
   } else if (typeof input === 'string') {
-    const p = splitDateTime(input);
-    if (p) {
-      date = p.date;
-      time = p.time !== '00:00:00' ? p.time : undefined;
-    }
-  } else if (typeof input === 'object' && (input.start_date || input.start_time)) {
-    return input; // ya viene armado
+    const parts = splitDateTime(input); // → { date: 'YYYY-MM-DD', time: 'HH:MM:SS' }
+    if (!parts) return undefined;
+    date = parts.date;
+    time = parts.time || '00:00:00';
+  } else if (typeof input === 'object') {
+    // Si ya viene con formato Podio, devolver tal cual
+    if (input.start || input.start_date) return input;
+    if (input.start_date) date = input.start_date;
   }
 
   if (!date) return undefined;
 
-  if (time) {
-    const out = { start_date: date, start_time: time };
-    if (wantsRange) {
-      out.end_date = date;
-      out.end_time = addHours(time, 1);
-    }
-    return out;
+  // Si hay hora, usamos claves start/end; si no, start_date/end_date
+  const hasTime = time !== '00:00:00';
+  if (hasTime) {
+    return wantRange
+      ? { start: `${date} ${time}`, end: `${date} ${time}` }
+      : { start: `${date} ${time}` };
   } else {
-    const out = { start_date: date };
-    if (wantsRange) out.end_date = date;
-    return out;
+    return wantRange ? { start_date: date, end_date: date } : { start_date: date };
   }
 }
 
@@ -2169,16 +2164,27 @@ app.post('/whatsapp', async (req, res) => {
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-            // ⬇️ Detectar el campo fecha de Leads y si es “range”
+            // ⬇️ Detectar el campo fecha correcto y si es “range”
+            function pickLeadsDateField(fields) {
+              const dates = (fields || []).filter(f => f.type === 'date');
+              if (!dates.length) return null;
+              const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
+              if (env) return dates.find(f => f.external_id === env) || dates[0];
+              const required = dates.find(f => !!f.config?.required);
+              return required || dates[0];
+            }
+
             const meta = await getLeadsFieldsMeta();
-            const df = meta.find(f => f.type === 'date');
-            const dateExternalId =
-              process.env.PODIO_LEADS_DATE_EXTERNAL_ID || (df ? df.external_id : null);
+            const df = pickLeadsDateField(meta);
+            const dateExternalId = df?.external_id || null;
             const wantsRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
 
+            // Campos para crear el Lead
             const fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
+              // solo si existe ese external_id en tu app:
+              // 'telefono-2': [{ type: 'mobile', value: currentState.tempPhoneDigits }],
               'vendedor-asignado-2': [vendedorId],
               'lead-status': [currentState.leadDraft.inquietud],
               'presupuesto-2': [currentState.leadDraft.presupuesto],
@@ -2187,27 +2193,14 @@ app.post('/whatsapp', async (req, res) => {
               seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
 
-            // ⬇️ Enviar fecha “hoy”; si el campo exige rango, mandamos range válido
+            // Fecha obligatoria (hoy). Si el campo exige range → start+end válidos
             if (dateExternalId) {
               fields[dateExternalId] = buildPodioDateObject(new Date(), wantsRange);
             }
 
             const created = await createItemIn('leads', fields);
-            currentState.leadItemId = created.item_id;
-            currentState.step = 'awaiting_newlead_voice';
 
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-            });
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '🎙️ Dejá *un audio* breve con lo conversado. Lo guardo en el seguimiento.',
-              },
-            });
-
-            // Guardamos el id del lead y pedimos el audio/texto
+            // Guardar contexto y pedir audio (una sola vez)
             currentState.leadItemId = created.item_id;
             currentState.step = 'awaiting_newlead_voice';
             delete currentState.lastInputType;
@@ -2219,7 +2212,7 @@ app.post('/whatsapp', async (req, res) => {
             await sendMessage(from, {
               type: 'text',
               text: {
-                body: '🎙️ Ahora dejame *un audio* (o texto) con lo conversado con el cliente. Lo agrego al seguimiento.',
+                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
               },
             });
           } catch (e) {
