@@ -126,45 +126,23 @@ function buildPodioDateForCreate(dfMeta, value = new Date()) {
 // - Si el campo es requerido y no viene → pone HOY.
 function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
   const out = { ...(fields || {}) };
-  const dates = (leadsMeta || []).filter(f => f.type === 'date');
+  const dateFieldsMeta = (leadsMeta || []).filter(f => f.type === 'date');
 
-  for (const df of dates) {
-    const ext = df.external_id;
-    let v = out[ext];
+  for (const fieldMeta of dateFieldsMeta) {
+    const externalId = fieldMeta.external_id;
+    const value = out[externalId];
 
-    // Si falta y es requerido → HOY
-    if (!v && df.config?.required) {
-      out[ext] = buildPodioDateForCreate(df, new Date());
+    // Caso 1: El campo es requerido pero no vino. Lo creamos con la fecha de hoy.
+    if (!value && fieldMeta.config?.required) {
+      out[externalId] = buildPodioDateForCreate(fieldMeta, new Date());
       continue;
     }
 
-    if (!v) continue;
-
-    // Aceptá varias formas y convertí a ARRAY de 1
-    if (Array.isArray(v)) {
-      // Si vino como [{ value: {...} }] lo aplanamos
-      if (v.length === 1 && v[0] && typeof v[0] === 'object' && v[0].value) v = [v[0].value];
-    } else {
-      v = [v];
+    // Caso 2: El campo vino, pero no es un array. Lo envolvemos en uno.
+    // Esto corrige el envío de un objeto simple `{...}` en lugar de `[{...}]`.
+    if (value && !Array.isArray(value)) {
+      out[externalId] = [value];
     }
-
-    const wantRange = (df.config?.settings?.end  || 'disabled') !== 'disabled';
-    const wantTime  = (df.config?.settings?.time || 'disabled') !== 'disabled';
-
-    const fixed = v.map(x => {
-      const { date: ymd, time: hhmmss } = splitStamp(x);
-
-      if (wantTime) {
-        const st = `${ymd} ${hhmmss || '00:00:00'}`;
-        return wantRange ? { start: st, end: x.end || st } : { start: st };
-      } else {
-        return wantRange
-          ? { start_date: ymd, end_date: x.end_date || ymd }
-          : { start_date: ymd };
-      }
-    });
-
-    out[ext] = fixed;
   }
 
   return out;
