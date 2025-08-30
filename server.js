@@ -480,6 +480,23 @@ async function findLeadByPhoneOrId(inputStr) {
   return { ok: false, reason: 'not_found' };
 }
 
+// Devuelve SIEMPRE un rango válido para Podio
+function forceRangeDate(input) {
+  let date = null, time = '00:00:00';
+  if (input instanceof Date) {
+    date = input.toISOString().slice(0,10);
+  } else if (typeof input === 'string') {
+    const s = input.replace('T',' ').trim();
+    const [d, t='00:00:00'] = s.split(/\s+/);
+    date = d; time = t;
+  }
+  if (!date) return undefined;
+  const hasTime = time !== '00:00:00';
+  return hasTime
+    ? { start: `${date} ${time}`, end: `${date} ${time}` }
+    : { start_date: date, end_date: date };
+}
+
 // --- OpenAI resumen (fallback si no hay crédito) ---
 async function summarizeWithOpenAI(text) {
   const raw = (text || '').toString().trim();
@@ -2325,15 +2342,11 @@ app.post('/whatsapp', async (req, res) => {
               seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
 
-            // ⬅️ Asegurar fecha válida según meta (con o sin rango / hora)
-            if (dateExternalId && !fields[dateExternalId]) {
-              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
-            }
-
-            // Fecha obligatoria (hoy). Si el campo exige range → start+end válidos
             if (dateExternalId) {
               fields[dateExternalId] = forceRangeDate(new Date());
             }
+
+            console.log('[LEADS PAYLOAD]', JSON.stringify({ fields }, null, 2));
 
             const created = await createItemIn('leads', fields);
 
