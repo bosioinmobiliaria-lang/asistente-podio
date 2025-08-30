@@ -2343,7 +2343,8 @@ app.post('/whatsapp', async (req, res) => {
             };
 
             if (dateExternalId) {
-              fields[dateExternalId] = forceRangeDate(new Date());
+              // ⬇️ CAMBIO CLAVE: Usamos la función correcta que devuelve un array.
+              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
             }
 
             console.log('[LEADS PAYLOAD]', JSON.stringify({ fields }, null, 2));
