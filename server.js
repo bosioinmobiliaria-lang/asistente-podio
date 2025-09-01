@@ -2340,21 +2340,14 @@ app.post('/whatsapp', async (req, res) => {
         try {
           const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-          // Elegimos el campo fecha de Leads
-          function pickLeadsDateField(fields) {
-            const dates = (fields || []).filter(f => f.type === 'date');
-            if (!dates.length) return null;
-            const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
-            if (env) return dates.find(f => f.external_id === env) || dates[0];
-            const required = dates.find(f => !!f.config?.required);
-            return required || dates[0];
-          }
-
+          // Obtenemos la metadata de los campos de Leads
           const meta = await getLeadsFieldsMeta();
-          const df = pickLeadsDateField(meta);
-          const dateExternalId = df?.external_id || null;
 
-          // 🔹 Campos del Lead (SIN 'seguimiento')
+          // Buscamos el primer campo de tipo 'date'
+          const dateFieldMeta = meta.find(f => f.type === 'date');
+          const dateExternalId = dateFieldMeta?.external_id || null;
+
+          // 🔹 Campos del Lead
           let fields = {
             'contacto-2': [{ item_id: currentState.contactItemId }],
             'telefono-busqueda': currentState.tempPhoneDigits,
@@ -2365,38 +2358,20 @@ app.post('/whatsapp', async (req, res) => {
             'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
           };
 
-          // 🔹 FECHA: forzamos SIEMPRE rango y lo envolvemos en un ARRAY
+          // -----------------------------------------------------------------
+          // ✅ SOLUCIÓN: Usamos la función helper que construye el objeto correcto
+          // Esta función leerá la metadata y creará { start } o { start_date }
+          // según la configuración real del campo en Podio.
+          // -----------------------------------------------------------------
           if (dateExternalId) {
-            const ymd = new Date().toISOString().slice(0, 10);
-            // ✅ CORRECCIÓN APLICADA AQUÍ
-            fields[dateExternalId] = [{ start_date: ymd, end_date: ymd }];
+            const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
+            fields[dateExternalId] = [podioDateObject]; // Lo envolvemos en el array
           }
 
-          // Log útil: ver exactamente qué se manda
           console.log('[LEADS] FINAL PAYLOAD A ENVIAR →', JSON.stringify({ fields }, null, 2));
 
-          // 👉 Intento A (sin hora)
-          let created;
-          try {
-            created = await createItemIn('leads', fields);
-          } catch (e) {
-            const edesc = e?.response?.data?.error_description || '';
-            console.error('Error creando Lead (A):', e?.response?.data || e.message);
-
-            // 👉 Intento B (con hora 00:00:00) SOLO si el error menciona "must be Range"
-            if (/must be Range/i.test(edesc) && dateExternalId) {
-              const ymd = new Date().toISOString().slice(0, 10);
-              const fieldsB = {
-                ...fields,
-                // ✅ CORRECCIÓN APLICADA AQUÍ TAMBIÉN
-                [dateExternalId]: [{ start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }],
-              };
-              console.warn('[LEADS] Reintentando con RANGO CON HORA →', fieldsB[dateExternalId]);
-              created = await createItemIn('leads', fieldsB);
-            } else {
-              throw e; // no es el caso típico, propagar
-            }
-          }
+          // Ya no necesitamos el try/catch anidado, porque ahora generamos el formato correcto desde el inicio.
+          const created = await createItemIn('leads', fields);
 
           // ✅ OK
           currentState.leadItemId = created.item_id;
