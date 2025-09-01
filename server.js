@@ -106,20 +106,6 @@ function splitStamp(input) {
   return { date: null, time: null };
 }
 
-// Construye SIEMPRE un ARRAY con el objeto de fecha correcto para crear items
-function buildPodioDateForCreate(dfMeta, value = new Date()) {
-  const { date: ymd, time: hhmmss } = splitStamp(value);
-  const wantRange = (dfMeta?.config?.settings?.end  || 'disabled') !== 'disabled';
-  const wantTime  = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
-  const stamp = `${ymd} ${hhmmss || '00:00:00'}`;
-
-  if (wantTime) {
-    return wantRange ? [{ start: stamp, end: stamp }] : [{ start: stamp }];
-  } else {
-    return wantRange ? [{ start_date: ymd, end_date: ymd }] : [{ start_date: ymd }];
-  }
-}
-
 // Normaliza TODAS las fechas que vayan en el payload de creación de LEADS.
 // - Convierte objetos sueltos a array
 // - Convierte "start_date"↔"start" según si el campo usa hora
@@ -140,7 +126,7 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
 
     // Caso 2: El campo vino, pero no es un array. Lo envolvemos en uno.
     if (Array.isArray(value)) {
-      out[externalId] = value[0] || null;
+  out[externalId] = value[0] || undefined;
     }
   }
   // La línea con el error "a;" ha sido eliminada.
@@ -152,12 +138,13 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
 function buildPodioDateForCreate(dfMeta, when = new Date()) {
   const ymd = when.toISOString().slice(0, 10);
   const wantTime = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+  const wantRange = (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
 
   if (wantTime) {
     const stamp = `${ymd} 00:00:00`;
-    return { start: stamp, end: stamp }; // 👈 objeto
+    return wantRange ? { start: stamp, end: stamp } : { start: stamp };
   } else {
-    return { start_date: ymd, end_date: ymd }; // 👈 objeto
+    return wantRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
   }
 }
 
