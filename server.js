@@ -106,6 +106,18 @@ function splitStamp(input) {
   return { date: null, time: null };
 }
 
+// Devuelve SIEMPRE un RANGO (start/end o start_date/end_date) para Podio
+function buildPodioDateRange(dfMeta, when = new Date()) {
+  const ymd = when.toISOString().slice(0, 10);
+  const wantTime = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+  if (wantTime) {
+    const stamp = `${ymd} 00:00:00`;
+    return { start: stamp, end: stamp };
+  } else {
+    return { start_date: ymd, end_date: ymd };
+  }
+}
+
 // Normaliza TODAS las fechas que vayan en el payload de creación de LEADS.
 // - Convierte objetos sueltos a array
 // - Convierte "start_date"↔"start" según si el campo usa hora
@@ -116,21 +128,25 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
 
   for (const fieldMeta of dateFieldsMeta) {
     const externalId = fieldMeta.external_id;
-    const value = out[externalId];
+    let value = out[externalId];
+    const isRange = (fieldMeta?.config?.settings?.end || 'disabled') !== 'disabled';
 
-    // Caso 1: El campo es requerido pero no vino. Lo creamos con la fecha de hoy.
+    // Si es requerido y no vino, crear hoy (respetando hora/no hora)
     if (!value && fieldMeta.config?.required) {
-      out[externalId] = buildPodioDateForCreate(fieldMeta, new Date());
+      value = buildPodioDateRange(fieldMeta, new Date()); // <-- SIEMPRE rango
+      out[externalId] = value;
       continue;
     }
 
-    // Caso 2: El campo vino, pero no es un array. Lo envolvemos en uno.
-    if (Array.isArray(value)) {
-  out[externalId] = value[0] || undefined;
+    // Si vino en array, quedate con el primero
+    if (Array.isArray(value)) value = out[externalId] = value[0] || undefined;
+
+    // Si el campo es rango y vino solo start/start_date, completá el end
+    if (isRange && value) {
+      if (value.start && !value.end) out[externalId].end = value.start;
+      if (value.start_date && !value.end_date) out[externalId].end_date = value.start_date;
     }
   }
-  // La línea con el error "a;" ha sido eliminada.
-
   return out;
 }
 
@@ -441,23 +457,6 @@ async function findLeadByPhoneOrId(inputStr) {
     if (item?.item_id) return { ok: true, leadItem: item };
   }
   return { ok: false, reason: 'not_found' };
-}
-
-// Devuelve SIEMPRE un rango válido para Podio
-function forceRangeDate(input) {
-  let date = null, time = '00:00:00';
-  if (input instanceof Date) {
-    date = input.toISOString().slice(0,10);
-  } else if (typeof input === 'string') {
-    const s = input.replace('T',' ').trim();
-    const [d, t='00:00:00'] = s.split(/\s+/);
-    date = d; time = t;
-  }
-  if (!date) return undefined;
-  const hasTime = time !== '00:00:00';
-  return hasTime
-    ? { start: `${date} ${time}`, end: `${date} ${time}` }
-    : { start_date: date, end_date: date };
 }
 
 // --- OpenAI resumen (fallback si no hay crédito) ---
@@ -1713,9 +1712,9 @@ app.post('/whatsapp', async (req, res) => {
       delete userStates[numeroRemitente];
       await sendFarewell(from);
       return; // ← no seguimos, no mostramos menú
-    } else   if (currentState) {
-    console.log('--- ESTADO ACTUAL ---', JSON.stringify(currentState, null, 2)); // <-- AGREGA ESTA LÍNEA
-    switch (currentState.step) {
+    } else if (currentState) {
+      console.log('--- ESTADO ACTUAL ---', JSON.stringify(currentState, null, 2)); // <-- AGREGA ESTA LÍNEA
+      switch (currentState.step) {
         case 'awaiting_name_only': {
           const nombre = (input || '').trim();
           if (!nombre || nombre.length < 3) {
@@ -2264,72 +2263,140 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'create_lead_expectativa': {
-  console.log('--- DEBUG: Ejecutando el flujo [create_lead_expectativa] ---');
+          console.log('--- DEBUG: Ejecutando el flujo [create_lead_expectativa] ---');
 
-  const id = EXPECTATIVA_MAP[input];
-  if (!id) {
-    await sendExpectativaList(from);
-    break;
-  }
-  // ✅ guardar la opción elegida usando el id resuelto
-  currentState.leadDraft.expectativa = id;
+          const id = EXPECTATIVA_MAP[input];
+          if (!id) {
+            await sendExpectativaList(from);
+            break;
+          }
+          currentState.leadDraft.expectativa = id; // ✅ usar el id resuelto
 
-  try {
-    const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+          try {
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-    function pickLeadsDateField(fields) {
-      const dates = (fields || []).filter(f => f.type === 'date');
-      if (!dates.length) return null;
-      const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
-      if (env) return dates.find(f => f.external_id === env) || dates[0];
-      const required = dates.find(f => !!f.config?.required);
-      return required || dates[0];
-    }
+            function pickLeadsDateField(fields) {
+              const dates = (fields || []).filter(f => f.type === 'date');
+              if (!dates.length) return null;
+              const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
+              if (env) return dates.find(f => f.external_id === env) || dates[0];
+              const required = dates.find(f => !!f.config?.required);
+              return required || dates[0];
+            }
 
-    const meta = await getLeadsFieldsMeta();
-    const df = pickLeadsDateField(meta);
-    const dateExternalId = df?.external_id || null;
+            const meta = await getLeadsFieldsMeta();
+            const df = pickLeadsDateField(meta);
+            const dateExternalId = df?.external_id || null;
 
-    const fields = {
-      'contacto-2': [{ item_id: currentState.contactItemId }],
-      'telefono-busqueda': currentState.tempPhoneDigits,
-      'vendedor-asignado-2': [vendedorId],
-      'lead-status': [currentState.leadDraft.inquietud],
-      'presupuesto-2': [currentState.leadDraft.presupuesto],
-      busca: [currentState.leadDraft.busca],
-      'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
-      seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
-    };
+            const fields = {
+              'contacto-2': [{ item_id: currentState.contactItemId }],
+              'telefono-busqueda': currentState.tempPhoneDigits,
+              'vendedor-asignado-2': [vendedorId],
+              'lead-status': [currentState.leadDraft.inquietud],
+              'presupuesto-2': [currentState.leadDraft.presupuesto],
+              busca: [currentState.leadDraft.busca],
+              'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+            };
 
-    if (dateExternalId) {
-      fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
-    }
+            // (1) LOG de meta y (2) FORZAR RANGO SIEMPRE
+            if (dateExternalId) {
+              console.log('[LEADS] Campo fecha elegido →', {
+                external_id: dateExternalId,
+                time: df?.config?.settings?.time,
+                end: df?.config?.settings?.end,
+                required: !!df?.config?.required,
+              });
+              fields[dateExternalId] = buildPodioDateRange(df, new Date()); // ⬅️ SIEMPRE RANGO
+              console.log('[LEADS] Valor de fecha que se envía →', fields[dateExternalId]);
+            }
 
-    const created = await createItemIn('leads', fields);
+            const created = await createItemIn('leads', fields);
 
-    currentState.leadItemId = created.item_id;
-    currentState.step = 'awaiting_newlead_voice';
-    delete currentState.lastInputType;
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+            delete currentState.lastInputType;
 
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-    });
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.' },
-    });
-  } catch (e) {
-    console.error('Error creando Lead:', e.response?.data || e.message || e);
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-    });
-    delete userStates[numeroRemitente];
-  }
-  break;
-}
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+            });
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
+              },
+            });
+          } catch (e) {
+            const edesc = e?.response?.data?.error_description || '';
+            console.error('Error creando Lead:', e.response?.data || e.message || e);
 
+            // (3) Fallback por si aun así se queja del formato: alternar a la otra forma (con/sin hora)
+            if (/must be Range/i.test(edesc)) {
+              try {
+                const meta = await getLeadsFieldsMeta();
+                const df =
+                  meta.find(
+                    f =>
+                      f.type === 'date' &&
+                      (!process.env.PODIO_LEADS_DATE_EXTERNAL_ID ||
+                        f.external_id === process.env.PODIO_LEADS_DATE_EXTERNAL_ID),
+                  ) || meta.find(f => f.type === 'date');
+                const dateExternalId = df?.external_id;
+                if (dateExternalId) {
+                  const hasTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
+                  // alternar: si tenía hora, mandamos sin hora; si no tenía, mandamos con hora
+                  const ymd = new Date().toISOString().slice(0, 10);
+                  const retry = hasTime
+                    ? { start_date: ymd, end_date: ymd }
+                    : { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` };
+
+                  console.warn('[LEADS] Reintentando con forma alternativa de rango →', retry);
+                  // reconstruimos brevemente el payload y reintentamos
+                  const vendedorId =
+                    VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+                  const fieldsRetry = {
+                    'contacto-2': [{ item_id: currentState.contactItemId }],
+                    'telefono-busqueda': currentState.tempPhoneDigits,
+                    'vendedor-asignado-2': [vendedorId],
+                    'lead-status': [currentState.leadDraft.inquietud],
+                    'presupuesto-2': [currentState.leadDraft.presupuesto],
+                    busca: [currentState.leadDraft.busca],
+                    'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+                    seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+                    [dateExternalId]: retry,
+                  };
+                  const created2 = await createItemIn('leads', fieldsRetry);
+
+                  currentState.leadItemId = created2.item_id;
+                  currentState.step = 'awaiting_newlead_voice';
+                  delete currentState.lastInputType;
+
+                  await sendMessage(from, {
+                    type: 'text',
+                    text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+                  });
+                  await sendMessage(from, {
+                    type: 'text',
+                    text: {
+                      body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
+                    },
+                  });
+                  break; // salimos del catch
+                }
+              } catch (e2) {
+                console.error('[LEADS] Reintento falló:', e2?.response?.data || e2.message);
+              }
+            }
+
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
 
         case 'awaiting_newlead_voice': {
           const leadId = currentState.leadItemId;
