@@ -2672,71 +2672,57 @@ app.post('/whatsapp', async (req, res) => {
             await sendExpectativaList(from);
             break;
           }
-
-          // Armamos campos para Podio
           currentState.newLead['ideal-time-frame-of-sale'] = [id];
 
-          const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-
-          // 1) Tomar meta del campo fecha
-          const meta = await getLeadsFieldsMeta();
-          const df = (() => {
-            const dates = (meta || []).filter(f => f.type === 'date');
-            if (!dates.length) return null;
-            const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
-            if (env) return dates.find(f => f.external_id === env) || dates[0];
-            const required = dates.find(f => !!f.config?.required);
-            return required || dates[0];
-          })();
-          const dateExternalId = df?.external_id || null;
-
-          // 2) Campos del Lead
-          const fields = {
-            'contacto-2': [{ item_id: currentState.contactItemId }],
-            'telefono-busqueda': currentState.tempPhoneDigits,
-            'vendedor-asignado-2': [vendedorId],
-            'lead-status': [currentState.leadDraft.inquietud],
-            'presupuesto-2': [currentState.leadDraft.presupuesto],
-            busca: [currentState.leadDraft.busca],
-            'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
-            seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
-          };
-
-          // 3) Fecha (hoy) en el FORMATO QUE PODIO ACEPTA PARA CREACIÓN (array)
-          if (dateExternalId) {
-            fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
-          }
-
-          // 4) Crear
-          const created = await createItemIn('leads', cleanDeep(fields));
-
-          // 5) Siguiente paso: pedir audio
-          currentState.leadItemId = created.item_id;
-          currentState.step = 'awaiting_newlead_voice';
-          delete currentState.lastInputType;
-
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-          });
-          await sendMessage(from, {
-            type: 'text',
-            text: {
-              body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
-            },
-          });
-
           try {
+            // --- Lógica de creación del Lead (UNA SOLA VEZ) ---
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+            const meta = await getLeadsFieldsMeta();
+            const df = (() => {
+              const dates = (meta || []).filter(f => f.type === 'date');
+              if (!dates.length) return null;
+              const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
+              if (env) return dates.find(f => f.external_id === env) || dates[0];
+              const required = dates.find(f => !!f.config?.required);
+              return required || dates[0];
+            })();
+            const dateExternalId = df?.external_id || null;
+
+            const fields = {
+              'contacto-2': [{ item_id: currentState.contactItemId }],
+              'telefono-busqueda': currentState.tempPhoneDigits,
+              'vendedor-asignado-2': [vendedorId],
+              'lead-status': currentState.newLead['lead-status'],
+              'presupuesto-2': currentState.newLead['presupuesto-2'],
+              busca: currentState.newLead['busca'],
+              'ideal-time-frame-of-sale': currentState.newLead['ideal-time-frame-of-sale'],
+              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+            };
+
+            if (dateExternalId) {
+              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
+            }
+
+            // Se crea el item UNA SOLA VEZ
             const created = await createItemIn('leads', fields);
+
+            // Si todo sale bien, pasamos al siguiente paso
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+            delete currentState.lastInputType;
+
             await sendMessage(from, {
               type: 'text',
-              text: { body: '✅ Lead creado y vinculado al contacto.' },
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
             });
-            // 👉 No volvemos al menú de actualizar lead; ofrecemos cierre:
-            currentState.step = 'post_results_options';
-            await sendPostResultsOptions(from);
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
+              },
+            });
           } catch (e) {
-            console.error('create lead fail:', e.response?.data || e.message);
+            console.error('Error creando Lead:', e.response?.data || e.message || e);
             await sendMessage(from, {
               type: 'text',
               text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
