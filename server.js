@@ -1513,7 +1513,12 @@ app.post('/leads', async (req, res) => {
       seguimiento: seguimiento || undefined,
       ...(extras && typeof extras === 'object' ? extras : {}),
     });
-    if (dateExternalId) {
+    const skipDate =
+      String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1' ||
+      req.query.skipDate === '1' ||
+      req.headers['x-skip-date'] === '1';
+
+    if (!skipDate && dateExternalId && (fecha || dateFieldMeta?.config?.required)) {
       fields[dateExternalId] = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
     }
     const created = await createItemIn('leads', fields);
