@@ -170,16 +170,18 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
 }
 
 // Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto de RANGO COMPLETO.
+
 function buildPodioDateForCreate(dfMeta, when = new Date()) {
   const ymd = when.toISOString().slice(0, 10);
   const wantTime = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
-  const wantRange = (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
+  const FORCE = String(process.env.PODIO_LEADS_FORCE_RANGE || '') === '1';
+  const isRange = FORCE || (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
 
   if (wantTime) {
     const stamp = `${ymd} 00:00:00`;
-    return wantRange ? { start: stamp, end: stamp } : { start: stamp };
+    return isRange ? { start: stamp, end: stamp } : { start: stamp };
   } else {
-    return wantRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
+    return isRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
   }
 }
 
@@ -300,22 +302,20 @@ function ddmmyyyyFromStamp(stamp) {
 async function createLeadWithDateFallback(fields, dateExternalId) {
   const ymd = new Date().toISOString().slice(0, 10);
 
-  // Intento A: rango sin hora (start_date / end_date)
-  let payloadA = { ...fields };
-  if (dateExternalId) payloadA[dateExternalId] = { start_date: ymd, end_date: ymd };
-  if (Array.isArray(payloadA[dateExternalId]))
-    payloadA[dateExternalId] = payloadA[dateExternalId][0];
+  // A) rango SIN hora (start_date / end_date)  → ARRAY
+  const payloadA = { ...fields };
+  if (dateExternalId) {
+    payloadA[dateExternalId] = [{ start_date: ymd, end_date: ymd }];
+  }
 
   try {
     return await createItemIn('leads', payloadA);
   } catch (e) {
-    // Intento B: rango con hora 00:00:00 (start / end)
-    let payloadB = { ...fields };
-    if (dateExternalId)
-      payloadB[dateExternalId] = { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` };
-    if (Array.isArray(payloadB[dateExternalId]))
-      payloadB[dateExternalId] = payloadB[dateExternalId][0];
-
+    // B) rango CON hora 00:00:00 (start / end) → ARRAY
+    const payloadB = { ...fields };
+    if (dateExternalId) {
+      payloadB[dateExternalId] = [{ start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }];
+    }
     return await createItemIn('leads', payloadB);
   }
 }
@@ -1514,7 +1514,8 @@ app.post('/leads', async (req, res) => {
       req.headers['x-skip-date'] === '1';
 
     if (!skipDate && dateExternalId && (fecha || dateFieldMeta?.config?.required)) {
-      fields[dateExternalId] = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
+      const d = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
+      fields[dateExternalId] = [d]; // Podio espera un ARRAY de objetos fecha
     }
     const created = await createItemIn('leads', fields);
     res.status(201).json({ ok: true, item_id: created.item_id, message: 'Lead creado en Podio' });
@@ -2325,70 +2326,70 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'create_lead_expectativa': {
-        const id = EXPECTATIVA_MAP[input];
-        if (!id) {
-          await sendExpectativaList(from);
+          const id = EXPECTATIVA_MAP[input];
+          if (!id) {
+            await sendExpectativaList(from);
+            break;
+          }
+          currentState.leadDraft.expectativa = id;
+
+          try {
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+
+            const meta = await getLeadsFieldsMeta();
+
+            // -----------------------------------------------------------------
+            // ✅ SOLUCIÓN FINAL: Corregimos el formato de TODOS los campos de categoría
+            // En lugar de [id], el formato correcto es [{ value: id }]
+            // -----------------------------------------------------------------
+            let fields = {
+              'contacto-2': [{ item_id: currentState.contactItemId }],
+              'telefono-busqueda': currentState.tempPhoneDigits,
+              'vendedor-asignado-2': [vendedorId],
+              'lead-status': [currentState.leadDraft.inquietud],
+              'presupuesto-2': [currentState.leadDraft.presupuesto],
+              busca: [currentState.leadDraft.busca],
+              'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+            };
+
+            // Restauramos la lógica de la fecha, que ahora sabemos que era inocente
+            const dateFieldMeta = meta.find(f => f.type === 'date');
+            const dateExternalId = dateFieldMeta?.external_id || null;
+
+            if (dateExternalId) {
+              const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
+              fields[dateExternalId] = [podioDateObject];
+            }
+
+            console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
+
+            const created = await createItemIn('leads', fields);
+
+            // ✅ OK
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+            delete currentState.lastInputType;
+
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+            });
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
+              },
+            });
+          } catch (e) {
+            console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
           break;
         }
-        currentState.leadDraft.expectativa = id;
-
-        try {
-          const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-
-          const meta = await getLeadsFieldsMeta();
-
-          // -----------------------------------------------------------------
-          // ✅ SOLUCIÓN FINAL: Corregimos el formato de TODOS los campos de categoría
-          // En lugar de [id], el formato correcto es [{ value: id }]
-          // -----------------------------------------------------------------
-          let fields = {
-            'contacto-2': [{ item_id: currentState.contactItemId }],
-            'telefono-busqueda': currentState.tempPhoneDigits,
-            'vendedor-asignado-2': [vendedorId],
-            'lead-status': [{ value: currentState.leadDraft.inquietud }],
-            'presupuesto-2': [{ value: currentState.leadDraft.presupuesto }],
-            busca: [{ value: currentState.leadDraft.busca }],
-            'ideal-time-frame-of-sale': [{ value: currentState.leadDraft.expectativa }],
-          };
-
-          // Restauramos la lógica de la fecha, que ahora sabemos que era inocente
-          const dateFieldMeta = meta.find(f => f.type === 'date');
-          const dateExternalId = dateFieldMeta?.external_id || null;
-
-          if (dateExternalId) {
-            const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
-            fields[dateExternalId] = [podioDateObject];
-          }
-
-          console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
-
-          const created = await createItemIn('leads', fields);
-
-          // ✅ OK
-          currentState.leadItemId = created.item_id;
-          currentState.step = 'awaiting_newlead_voice';
-          delete currentState.lastInputType;
-
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-          });
-          await sendMessage(from, {
-            type: 'text',
-            text: {
-              body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
-            },
-          });
-        } catch (e) {
-          console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-          });
-          delete userStates[numeroRemitente];
-        }
-        break;
-      }
 
         case 'awaiting_newlead_voice': {
           const leadId = currentState.leadItemId;
