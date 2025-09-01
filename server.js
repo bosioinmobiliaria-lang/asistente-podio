@@ -2335,12 +2335,7 @@ app.post('/whatsapp', async (req, res) => {
         try {
           const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-          // Obtenemos la metadata de los campos de Leads
           const meta = await getLeadsFieldsMeta();
-
-          // Buscamos el primer campo de tipo 'date'
-          const dateFieldMeta = meta.find(f => f.type === 'date');
-          const dateExternalId = dateFieldMeta?.external_id || null;
 
           // 🔹 Campos del Lead
           let fields = {
@@ -2354,18 +2349,21 @@ app.post('/whatsapp', async (req, res) => {
           };
 
           // -----------------------------------------------------------------
-          // ✅ SOLUCIÓN: Usamos la función helper que construye el objeto correcto
-          // Esta función leerá la metadata y creará { start } o { start_date }
-          // según la configuración real del campo en Podio.
+          // ✅ PRUEBA: Comentamos temporalmente TODO lo relacionado con la fecha
           // -----------------------------------------------------------------
+          /*
+          const dateFieldMeta = meta.find(f => f.type === 'date');
+          const dateExternalId = dateFieldMeta?.external_id || null;
+
           if (dateExternalId) {
             const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
-            fields[dateExternalId] = [podioDateObject]; // Lo envolvemos en el array
+            fields[dateExternalId] = [podioDateObject];
           }
+          */
+          // -----------------------------------------------------------------
 
-          console.log('[LEADS] FINAL PAYLOAD A ENVIAR →', JSON.stringify({ fields }, null, 2));
+          console.log('[LEADS] FINAL PAYLOAD (SIN FECHA) →', JSON.stringify({ fields }, null, 2));
 
-          // Ya no necesitamos el try/catch anidado, porque ahora generamos el formato correcto desde el inicio.
           const created = await createItemIn('leads', fields);
 
           // ✅ OK
