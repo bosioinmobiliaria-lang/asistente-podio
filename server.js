@@ -126,26 +126,37 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
   const out = { ...(fields || {}) };
   const dateFieldsMeta = (leadsMeta || []).filter(f => f.type === 'date');
 
-  for (const fieldMeta of dateFieldsMeta) {
-    const externalId = fieldMeta.external_id;
-    let value = out[externalId];
-    const isRange = (fieldMeta?.config?.settings?.end || 'disabled') !== 'disabled';
+  for (const df of dateFieldsMeta) {
+    const ext = df.external_id;
+    let v = out[ext];
+    const isRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+    const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
 
-    // Si es requerido y no vino, crear hoy (respetando hora/no hora)
-    if (!value && fieldMeta.config?.required) {
-      value = buildPodioDateRange(fieldMeta, new Date()); // <-- SIEMPRE rango
-      out[externalId] = value;
-      continue;
+    // Si es requerido y no vino → hoy (rango)
+    if (!v && df.config?.required) {
+      const ymd = new Date().toISOString().slice(0, 10);
+      if (wantTime) {
+        const stamp = `${ymd} 00:00:00`;
+        v = { start: stamp, end: stamp };
+      } else {
+        v = { start_date: ymd, end_date: ymd };
+      }
     }
 
-    // Si vino en array, quedate con el primero
-    if (Array.isArray(value)) value = out[externalId] = value[0] || undefined;
+    if (!v) continue;
 
-    // Si el campo es rango y vino solo start/start_date, completá el end
-    if (isRange && value) {
-      if (value.start && !value.end) out[externalId].end = value.start;
-      if (value.start_date && !value.end_date) out[externalId].end_date = value.start_date;
+    // Si vino en array, quedate con el primero para completar y luego re–envolvemos
+    if (Array.isArray(v)) v = v[0] || undefined;
+    if (!v) continue;
+
+    // Completar el end si el campo es de rango
+    if (isRange) {
+      if (v.start && !v.end) v = { ...v, end: v.start };
+      if (v.start_date && !v.end_date) v = { ...v, end_date: v.start_date };
     }
+
+    // 🔴 CLAVE: Podio (en esta app) quiere ARRAY con un objeto
+    out[ext] = [v];
   }
   return out;
 }
@@ -1212,8 +1223,50 @@ async function createItemIn(appName, fields) {
 
   if (appName === 'leads') {
     const leadsMeta = await getLeadsFieldsMeta();
+
+    // 1) Normalización que ya tenías
     payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
-    console.log('[LEADS] Payload FECHAS normalizado →', JSON.stringify(payloadFields, null, 2));
+
+    // 2) BONUS DEFENSIVO: para cada campo fecha de Leads
+    for (const df of leadsMeta.filter(f => f.type === 'date')) {
+      const ext = df.external_id;
+      let v = payloadFields?.[ext];
+      if (!v) continue; // si no está presente, seguimos
+
+      // Asegurar ARRAY con un solo objeto
+      if (!Array.isArray(v)) v = payloadFields[ext] = [v];
+      if (!v.length) continue;
+
+      const o = v[0];
+      const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
+      const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+
+      if (wantTime) {
+        // Unificamos claves a start/end (con hora)
+        if (o.start_date && !o.start) o.start = `${o.start_date} 00:00:00`;
+        if (o.end_date && !o.end) o.end = `${o.end_date} 00:00:00`;
+        delete o.start_date;
+        delete o.end_date;
+
+        // Si es rango y falta end → igual a start
+        if (wantRange && o.start && !o.end) o.end = o.start;
+        // Si NO es rango, limpiamos end
+        if (!wantRange) delete o.end;
+      } else {
+        // Unificamos claves a start_date/end_date (sin hora)
+        if (o.start && !o.start_date) o.start_date = String(o.start).split(' ')[0];
+        if (o.end && !o.end_date) o.end_date = String(o.end).split(' ')[0];
+        delete o.start;
+        delete o.end;
+
+        // Si es rango y falta end_date → igual a start_date
+        if (wantRange && o.start_date && !o.end_date) o.end_date = o.start_date;
+        // Si NO es rango, limpiamos end_date
+        if (!wantRange) delete o.end_date;
+      }
+    }
+
+    console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
   }
 
   const { data } = await axios.post(
@@ -2300,16 +2353,6 @@ app.post('/whatsapp', async (req, res) => {
             };
 
             // (1) LOG de meta y (2) FORZAR RANGO SIEMPRE
-            if (dateExternalId) {
-              console.log('[LEADS] Campo fecha elegido →', {
-                external_id: dateExternalId,
-                time: df?.config?.settings?.time,
-                end: df?.config?.settings?.end,
-                required: !!df?.config?.required,
-              });
-              fields[dateExternalId] = buildPodioDateRange(df, new Date()); // ⬅️ SIEMPRE RANGO
-              console.log('[LEADS] Valor de fecha que se envía →', fields[dateExternalId]);
-            }
 
             const created = await createItemIn('leads', fields);
 
