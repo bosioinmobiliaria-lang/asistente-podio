@@ -2273,77 +2273,78 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
           currentState.leadDraft.busca = BUSCA_MAP[m[0]];
-          currentState.step = 'awaiting_expectativa';
+          currentState.step = 'create_lead_expectativa';
           await sendExpectativaList(from);
           break;
         }
 
         case 'create_lead_expectativa': {
-          console.log('--- DEBUG: Ejecutando el flujo [create_lead_expectativa] ---');
-          const id = EXPECTATIVA_MAP[input];
-          if (!id) {
-            await sendExpectativaList(from);
-            break;
-          }
-          currentState.leadDraft.expectativa = EXPECTATIVA_MAP[m[0]];
+  console.log('--- DEBUG: Ejecutando el flujo [create_lead_expectativa] ---');
 
-          try {
-            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+  const id = EXPECTATIVA_MAP[input];
+  if (!id) {
+    await sendExpectativaList(from);
+    break;
+  }
+  // ✅ guardar la opción elegida usando el id resuelto
+  currentState.leadDraft.expectativa = id;
 
-            function pickLeadsDateField(fields) {
-              const dates = (fields || []).filter(f => f.type === 'date');
-              if (!dates.length) return null;
-              const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
-              if (env) return dates.find(f => f.external_id === env) || dates[0];
-              const required = dates.find(f => !!f.config?.required);
-              return required || dates[0];
-            }
+  try {
+    const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-            const meta = await getLeadsFieldsMeta();
-            const df = pickLeadsDateField(meta);
-            const dateExternalId = df?.external_id || null;
+    function pickLeadsDateField(fields) {
+      const dates = (fields || []).filter(f => f.type === 'date');
+      if (!dates.length) return null;
+      const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
+      if (env) return dates.find(f => f.external_id === env) || dates[0];
+      const required = dates.find(f => !!f.config?.required);
+      return required || dates[0];
+    }
 
-            const fields = {
-              'contacto-2': [{ item_id: currentState.contactItemId }],
-              'telefono-busqueda': currentState.tempPhoneDigits,
-              'vendedor-asignado-2': [vendedorId],
-              'lead-status': [currentState.leadDraft.inquietud],
-              'presupuesto-2': [currentState.leadDraft.presupuesto],
-              busca: [currentState.leadDraft.busca],
-              'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
-              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
-            };
+    const meta = await getLeadsFieldsMeta();
+    const df = pickLeadsDateField(meta);
+    const dateExternalId = df?.external_id || null;
 
-            if (dateExternalId) {
-              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
-            }
+    const fields = {
+      'contacto-2': [{ item_id: currentState.contactItemId }],
+      'telefono-busqueda': currentState.tempPhoneDigits,
+      'vendedor-asignado-2': [vendedorId],
+      'lead-status': [currentState.leadDraft.inquietud],
+      'presupuesto-2': [currentState.leadDraft.presupuesto],
+      busca: [currentState.leadDraft.busca],
+      'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+      seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
+    };
 
-            const created = await createItemIn('leads', fields);
+    if (dateExternalId) {
+      fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
+    }
 
-            currentState.leadItemId = created.item_id;
-            currentState.step = 'awaiting_newlead_voice';
-            delete currentState.lastInputType;
+    const created = await createItemIn('leads', fields);
 
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-            });
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
-              },
-            });
-          } catch (e) {
-            console.error('Error creando Lead:', e.response?.data || e.message || e);
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-            });
-            delete userStates[numeroRemitente];
-          }
-          break;
-        }
+    currentState.leadItemId = created.item_id;
+    currentState.step = 'awaiting_newlead_voice';
+    delete currentState.lastInputType;
+
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+    });
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.' },
+    });
+  } catch (e) {
+    console.error('Error creando Lead:', e.response?.data || e.message || e);
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+    });
+    delete userStates[numeroRemitente];
+  }
+  break;
+}
+
 
         case 'awaiting_newlead_voice': {
           const leadId = currentState.leadItemId;
@@ -2655,69 +2656,6 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'create_lead_expectativa': {
-          const id = EXPECTATIVA_MAP[input];
-          if (!id) {
-            await sendExpectativaList(from);
-            break;
-          }
-          currentState.newLead['ideal-time-frame-of-sale'] = [id];
-
-          try {
-            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-            const meta = await getLeadsFieldsMeta();
-            const df = (() => {
-              const dates = (meta || []).filter(f => f.type === 'date');
-              if (!dates.length) return null;
-              const env = process.env.PODIO_LEADS_DATE_EXTERNAL_ID;
-              if (env) return dates.find(f => f.external_id === env) || dates[0];
-              const required = dates.find(f => !!f.config?.required);
-              return required || dates[0];
-            })();
-            const dateExternalId = df?.external_id || null;
-
-            const fields = {
-              'contacto-2': [{ item_id: currentState.contactItemId }],
-              'telefono-busqueda': currentState.tempPhoneDigits,
-              'vendedor-asignado-2': [vendedorId],
-              'lead-status': currentState.newLead['lead-status'],
-              'presupuesto-2': currentState.newLead['presupuesto-2'],
-              busca: currentState.newLead['busca'],
-              'ideal-time-frame-of-sale': currentState.newLead['ideal-time-frame-of-sale'],
-              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
-            };
-
-            if (dateExternalId) {
-              fields[dateExternalId] = buildPodioDateForCreate(df, new Date());
-            }
-
-            const created = await createItemIn('leads', fields);
-
-            currentState.leadItemId = created.item_id;
-            currentState.step = 'awaiting_newlead_voice';
-            delete currentState.lastInputType;
-
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-            });
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
-              },
-            });
-          } catch (e) {
-            console.error('Error creando Lead:', e.response?.data || e.message || e);
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-            });
-            delete userStates[numeroRemitente];
-          }
-          break;
-        }
-
         case 'after_update_options': {
           if (input === 'after_back_menu') {
             delete userStates[numeroRemitente];
@@ -2733,50 +2671,6 @@ app.post('/whatsapp', async (req, res) => {
           } else {
             await sendAfterUpdateOptions(from);
           }
-          break;
-        }
-
-        case 'awaiting_newlead_voice': {
-          const leadId = currentState.leadItemId;
-          const raw = (input || '').trim();
-          const kind = currentState.lastInputType || 'text'; // 'audio' o 'text'
-
-          if (!raw) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '🤏 No se entendió. Probá de nuevo o escribí *cancelar*.' },
-            });
-            break;
-          }
-
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: kind === 'audio' ? '🎧 Procesando…' : '📝 Guardando…' },
-          });
-
-          let toSave = raw;
-          if (kind === 'audio') {
-            try {
-              const resumen = await summarizeWithOpenAI(raw);
-              if (resumen?.trim()) toSave = resumen.trim();
-            } catch (e) {
-              console.error('[Seguimiento] resumen fail:', e.message);
-            }
-          }
-
-          const r = await appendToLeadSeguimiento(leadId, toSave);
-          await sendMessage(from, {
-            type: 'text',
-            text: {
-              body: r.ok
-                ? '✅ Quedó guardado en *Seguimiento*.'
-                : '❌ No pude guardar. Avisá al administrador.',
-            },
-          });
-
-          delete currentState.lastInputType;
-          currentState.step = 'after_update_options';
-          await sendAfterUpdateOptions(from);
           break;
         }
 
