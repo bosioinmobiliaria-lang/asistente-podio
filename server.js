@@ -1255,28 +1255,23 @@ async function createItemIn(appName, fields) {
   if (appName === 'leads') {
     const leadsMeta = await getLeadsFieldsMeta();
 
-    // 1) Normalización que ya tenías
-    payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
+    // ❌ ELIMINAMOS ESTA LÍNEA PROBLEMÁTICA
+    // payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
 
-    if (appName === 'leads') {
-      const leadsMeta = await getLeadsFieldsMeta();
-      payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
-
-      // Log diagnóstico claro
-      const df = (leadsMeta || []).find(f => f.type === 'date');
-      console.log(
-        '[LEADS] Date ext:',
-        df?.external_id,
-        '| wantTime=',
-        (df?.config?.settings?.time || 'disabled') !== 'disabled',
-        '| wantRange=',
-        (df?.config?.settings?.end || 'disabled') !== 'disabled',
-      );
-      console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
-    }
-
-    console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
+    // Dejamos el log de diagnóstico que es útil
+    const df = (leadsMeta || []).find(f => f.type === 'date');
+    console.log(
+      '[LEADS] Date ext:',
+      df?.external_id,
+      '| wantTime=',
+      (df?.config?.settings?.time || 'disabled') !== 'disabled',
+      '| wantRange=',
+      (df?.config?.settings?.end || 'disabled') !== 'disabled',
+    );
   }
+
+  // El resto de la función sigue igual...
+  console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
 
   const { data } = await axios.post(
     `https://api.podio.com/item/app/${appId}/`,
