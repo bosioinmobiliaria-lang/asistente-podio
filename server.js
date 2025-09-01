@@ -289,6 +289,29 @@ function ddmmyyyyFromStamp(stamp) {
   const [Y, M, D] = d.split('-');
   return `${D}/${M}/${Y}`;
 }
+async function createLeadWithDateFallback(fields, dateExternalId) {
+  const ymd = new Date().toISOString().slice(0, 10);
+
+  // Intento A: rango sin hora (start_date / end_date)
+  let payloadA = { ...fields };
+  if (dateExternalId) payloadA[dateExternalId] = { start_date: ymd, end_date: ymd };
+  if (Array.isArray(payloadA[dateExternalId]))
+    payloadA[dateExternalId] = payloadA[dateExternalId][0];
+
+  try {
+    return await createItemIn('leads', payloadA);
+  } catch (e) {
+    // Intento B: rango con hora 00:00:00 (start / end)
+    let payloadB = { ...fields };
+    if (dateExternalId)
+      payloadB[dateExternalId] = { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` };
+    if (Array.isArray(payloadB[dateExternalId]))
+      payloadB[dateExternalId] = payloadB[dateExternalId][0];
+
+    return await createItemIn('leads', payloadB);
+  }
+}
+
 // Devuelve "DD/MM/AAAA: contenido" del último bloque del campo seguimiento
 function extractLastSeguimientoLine(wholeText) {
   const clean = stripHtml((wholeText || '').replace(/\r/g, ''));
@@ -2390,11 +2413,13 @@ app.post('/whatsapp', async (req, res) => {
                   const hasTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
                   // alternar: si tenía hora, mandamos sin hora; si no tenía, mandamos con hora
                   const ymd = new Date().toISOString().slice(0, 10);
+                  fields[dateExternalId] = { start_date: ymd, end_date: ymd };
                   const retry = hasTime
                     ? { start_date: ymd, end_date: ymd }
                     : { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` };
 
                   console.warn('[LEADS] Reintentando con forma alternativa de rango →', retry);
+                
                   // reconstruimos brevemente el payload y reintentamos
                   const vendedorId =
                     VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
