@@ -124,39 +124,47 @@ function buildPodioDateRange(dfMeta, when = new Date()) {
 // - Si el campo es requerido y no viene → pone HOY.
 function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
   const out = { ...(fields || {}) };
-  const dateFieldsMeta = (leadsMeta || []).filter(f => f.type === 'date');
+  const dateFields = (leadsMeta || []).filter(f => f.type === 'date');
 
-  for (const df of dateFieldsMeta) {
+  for (const df of dateFields) {
     const ext = df.external_id;
     let v = out[ext];
-    const isRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
-    const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
 
-    // Si es requerido y no vino → hoy (rango)
+    const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
+    const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+
+    // Si el campo es requerido y no vino, usamos HOY (como RANGO)
     if (!v && df.config?.required) {
       const ymd = new Date().toISOString().slice(0, 10);
-      if (wantTime) {
-        const stamp = `${ymd} 00:00:00`;
-        v = { start: stamp, end: stamp };
-      } else {
-        v = { start_date: ymd, end_date: ymd };
-      }
+      v = wantTime
+        ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+        : { start_date: ymd, end_date: ymd };
     }
-
     if (!v) continue;
 
-    // Si vino en array, quedate con el primero para completar y luego re–envolvemos
-    if (Array.isArray(v)) v = v[0] || undefined;
-    if (!v) continue;
+    // Si vino en array, tomar el primero (create espera objeto)
+    if (Array.isArray(v)) v = v[0];
 
-    // Completar el end si el campo es de rango
-    if (isRange) {
-      if (v.start && !v.end) v = { ...v, end: v.start };
-      if (v.start_date && !v.end_date) v = { ...v, end_date: v.start_date };
+    // Unificar claves según tenga hora o no
+    if (wantTime) {
+      // pasar _date → con hora
+      if (v.start_date && !v.start) v.start = `${v.start_date} 00:00:00`;
+      if (v.end_date && !v.end) v.end = `${v.end_date} 00:00:00`;
+      delete v.start_date;
+      delete v.end_date;
+      if (wantRange && v.start && !v.end) v.end = v.start;
+      if (!wantRange) delete v.end;
+    } else {
+      // pasar con hora → _date
+      if (v.start && !v.start_date) v.start_date = String(v.start).split(' ')[0];
+      if (v.end && !v.end_date) v.end_date = String(v.end).split(' ')[0];
+      delete v.start;
+      delete v.end;
+      if (wantRange && v.start_date && !v.end_date) v.end_date = v.start_date;
+      if (!wantRange) delete v.end_date;
     }
 
-    // 🔴 CLAVE: Podio (en esta app) quiere ARRAY con un objeto
-    out[ext] = [v];
+    out[ext] = v; // ← **OBJETO**, no array
   }
   return out;
 }
@@ -1250,43 +1258,21 @@ async function createItemIn(appName, fields) {
     // 1) Normalización que ya tenías
     payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
 
-    // 2) BONUS DEFENSIVO: para cada campo fecha de Leads
-    for (const df of leadsMeta.filter(f => f.type === 'date')) {
-      const ext = df.external_id;
-      let v = payloadFields?.[ext];
-      if (!v) continue; // si no está presente, seguimos
+    if (appName === 'leads') {
+      const leadsMeta = await getLeadsFieldsMeta();
+      payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
 
-      // Asegurar ARRAY con un solo objeto
-      if (!Array.isArray(v)) v = payloadFields[ext] = [v];
-      if (!v.length) continue;
-
-      const o = v[0];
-      const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
-      const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
-
-      if (wantTime) {
-        // Unificamos claves a start/end (con hora)
-        if (o.start_date && !o.start) o.start = `${o.start_date} 00:00:00`;
-        if (o.end_date && !o.end) o.end = `${o.end_date} 00:00:00`;
-        delete o.start_date;
-        delete o.end_date;
-
-        // Si es rango y falta end → igual a start
-        if (wantRange && o.start && !o.end) o.end = o.start;
-        // Si NO es rango, limpiamos end
-        if (!wantRange) delete o.end;
-      } else {
-        // Unificamos claves a start_date/end_date (sin hora)
-        if (o.start && !o.start_date) o.start_date = String(o.start).split(' ')[0];
-        if (o.end && !o.end_date) o.end_date = String(o.end).split(' ')[0];
-        delete o.start;
-        delete o.end;
-
-        // Si es rango y falta end_date → igual a start_date
-        if (wantRange && o.start_date && !o.end_date) o.end_date = o.start_date;
-        // Si NO es rango, limpiamos end_date
-        if (!wantRange) delete o.end_date;
-      }
+      // Log diagnóstico claro
+      const df = (leadsMeta || []).find(f => f.type === 'date');
+      console.log(
+        '[LEADS] Date ext:',
+        df?.external_id,
+        '| wantTime=',
+        (df?.config?.settings?.time || 'disabled') !== 'disabled',
+        '| wantRange=',
+        (df?.config?.settings?.end || 'disabled') !== 'disabled',
+      );
+      console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
     }
 
     console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
@@ -1519,7 +1505,7 @@ app.post('/leads', async (req, res) => {
     const wantRange = forceRangeFromReq || forceRangeFromEnv || apiSaysRange;
     const fields = cleanDeep({
       'contacto-2': contacto_item_id ? [{ item_id: contacto_item_id }] : undefined,
-      'telefono-2': telefono ? [{ type: 'mobile', value: telefono }] : undefined,
+      'telefono-busqueda': telefono ? String(telefono).replace(/\D/g, '') : undefined,
       'vendedor-asignado-2': vendedor_option_id ? [vendedor_option_id] : undefined,
       'lead-status': lead_status_option_id ? [lead_status_option_id] : undefined,
       ubicacion: ubicacion || undefined,
@@ -1567,7 +1553,7 @@ app.post('/debug/leads/payload', async (req, res) => {
     const wantRange = forceRangeFromReq || forceRangeFromEnv || apiSaysRange;
     const fields = cleanDeep({
       'contacto-2': contacto_item_id ? [{ item_id: contacto_item_id }] : undefined,
-      'telefono-2': telefono ? [{ type: 'mobile', value: telefono }] : undefined,
+      'telefono-busqueda': telefono ? String(telefono).replace(/\D/g, '') : undefined,
       'vendedor-asignado-2': vendedor_option_id ? [vendedor_option_id] : undefined,
       'lead-status': lead_status_option_id ? [lead_status_option_id] : undefined,
       ubicacion: ubicacion || undefined,
