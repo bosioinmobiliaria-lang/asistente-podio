@@ -139,8 +139,8 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
     }
 
     // Caso 2: El campo vino, pero no es un array. Lo envolvemos en uno.
-    if (value && !Array.isArray(value)) {
-      out[externalId] = [value];
+    if (Array.isArray(value)) {
+      out[externalId] = value[0] || null;
     }
   }
   // La línea con el error "a;" ha sido eliminada.
@@ -155,11 +155,9 @@ function buildPodioDateForCreate(dfMeta, when = new Date()) {
 
   if (wantTime) {
     const stamp = `${ymd} 00:00:00`;
-    // Forzamos SIEMPRE el envío de 'start' y 'end'.
-    return [{ start: stamp, end: stamp }];
+    return { start: stamp, end: stamp }; // 👈 objeto
   } else {
-    // Forzamos SIEMPRE el envío de 'start_date' y 'end_date'.
-    return [{ start_date: ymd, end_date: ymd }];
+    return { start_date: ymd, end_date: ymd }; // 👈 objeto
   }
 }
 
