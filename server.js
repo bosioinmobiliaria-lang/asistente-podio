@@ -144,22 +144,23 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
       out[externalId] = [value];
     }
   }
+  a;
 
   return out;
 }
 
-// Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto.
-// Respeta si el campo usa rango (start/end o start_date/end_date) y si usa hora.
+// Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto de RANGO COMPLETO.
 function buildPodioDateForCreate(dfMeta, when = new Date()) {
   const ymd = when.toISOString().slice(0, 10);
-  const wantRange = (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
-  const wantTime  = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+  const wantTime = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
 
   if (wantTime) {
     const stamp = `${ymd} 00:00:00`;
-    return wantRange ? [{ start: stamp, end: stamp }] : [{ start: stamp }];
+    // Forzamos SIEMPRE el envío de 'start' y 'end'.
+    return [{ start: stamp, end: stamp }];
   } else {
-    return wantRange ? [{ start_date: ymd, end_date: ymd }] : [{ start_date: ymd }];
+    // Forzamos SIEMPRE el envío de 'start_date' y 'end_date'.
+    return [{ start_date: ymd, end_date: ymd }];
   }
 }
 
