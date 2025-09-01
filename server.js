@@ -139,12 +139,11 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
     }
 
     // Caso 2: El campo vino, pero no es un array. Lo envolvemos en uno.
-    // Esto corrige el envío de un objeto simple `{...}` en lugar de `[{...}]`.
     if (value && !Array.isArray(value)) {
       out[externalId] = [value];
     }
   }
-  a;
+  // La línea con el error "a;" ha sido eliminada.
 
   return out;
 }
