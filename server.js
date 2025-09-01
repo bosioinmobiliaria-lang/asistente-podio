@@ -1729,11 +1729,9 @@ app.post('/whatsapp', async (req, res) => {
       delete userStates[numeroRemitente];
       await sendFarewell(from);
       return; // ← no seguimos, no mostramos menú
-    } else if (currentState) {
-      // --------------------
-      // Flujo con estado (LA LÓGICA INTERNA NO CAMBIA, SOLO EL ENVÍO)
-      // --------------------
-      switch (currentState.step) {
+    } else   if (currentState) {
+    console.log('--- ESTADO ACTUAL ---', JSON.stringify(currentState, null, 2)); // <-- AGREGA ESTA LÍNEA
+    switch (currentState.step) {
         case 'awaiting_name_only': {
           const nombre = (input || '').trim();
           if (!nombre || nombre.length < 3) {
