@@ -2339,18 +2339,17 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'create_lead_expectativa': {
-          console.log('--- DEBUG: Ejecutando el flujo [create_lead_expectativa] ---');
-
           const id = EXPECTATIVA_MAP[input];
           if (!id) {
             await sendExpectativaList(from);
             break;
           }
-          currentState.leadDraft.expectativa = id; // ✅ usar el id resuelto
+          currentState.leadDraft.expectativa = id;
 
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
+            // Elegimos el campo fecha de Leads
             function pickLeadsDateField(fields) {
               const dates = (fields || []).filter(f => f.type === 'date');
               if (!dates.length) return null;
@@ -2364,7 +2363,8 @@ app.post('/whatsapp', async (req, res) => {
             const df = pickLeadsDateField(meta);
             const dateExternalId = df?.external_id || null;
 
-            const fields = {
+            // 🔹 Campos del Lead (SIN 'seguimiento')
+            let fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
               'vendedor-asignado-2': [vendedorId],
@@ -2372,13 +2372,40 @@ app.post('/whatsapp', async (req, res) => {
               'presupuesto-2': [currentState.leadDraft.presupuesto],
               busca: [currentState.leadDraft.busca],
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
-              seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
             };
 
-            // (1) LOG de meta y (2) FORZAR RANGO SIEMPRE
+            // 🔹 FECHA: forzamos SIEMPRE rango SIN hora (objeto, NO array)
+            if (dateExternalId) {
+              const ymd = new Date().toISOString().slice(0, 10);
+              fields[dateExternalId] = { start_date: ymd, end_date: ymd };
+            }
 
-            const created = await createItemIn('leads', fields);
+            // Log útil: ver exactamente qué se manda
+            console.log('[LEADS] FINAL PAYLOAD A ENVIAR →', JSON.stringify({ fields }, null, 2));
 
+            // 👉 Intento A (sin hora)
+            let created;
+            try {
+              created = await createItemIn('leads', fields);
+            } catch (e) {
+              const edesc = e?.response?.data?.error_description || '';
+              console.error('Error creando Lead (A):', e?.response?.data || e.message);
+
+              // 👉 Intento B (con hora 00:00:00) SOLO si el error menciona "must be Range"
+              if (/must be Range/i.test(edesc) && dateExternalId) {
+                const ymd = new Date().toISOString().slice(0, 10);
+                const fieldsB = {
+                  ...fields,
+                  [dateExternalId]: { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` },
+                };
+                console.warn('[LEADS] Reintentando con RANGO CON HORA →', fieldsB[dateExternalId]);
+                created = await createItemIn('leads', fieldsB);
+              } else {
+                throw e; // no es el caso típico, propagar
+              }
+            }
+
+            // ✅ OK
             currentState.leadItemId = created.item_id;
             currentState.step = 'awaiting_newlead_voice';
             delete currentState.lastInputType;
@@ -2390,73 +2417,11 @@ app.post('/whatsapp', async (req, res) => {
             await sendMessage(from, {
               type: 'text',
               text: {
-                body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
+                body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
               },
             });
           } catch (e) {
-            const edesc = e?.response?.data?.error_description || '';
-            console.error('Error creando Lead:', e.response?.data || e.message || e);
-
-            // (3) Fallback por si aun así se queja del formato: alternar a la otra forma (con/sin hora)
-            if (/must be Range/i.test(edesc)) {
-              try {
-                const meta = await getLeadsFieldsMeta();
-                const df =
-                  meta.find(
-                    f =>
-                      f.type === 'date' &&
-                      (!process.env.PODIO_LEADS_DATE_EXTERNAL_ID ||
-                        f.external_id === process.env.PODIO_LEADS_DATE_EXTERNAL_ID),
-                  ) || meta.find(f => f.type === 'date');
-                const dateExternalId = df?.external_id;
-                if (dateExternalId) {
-                  const hasTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
-                  // alternar: si tenía hora, mandamos sin hora; si no tenía, mandamos con hora
-                  const ymd = new Date().toISOString().slice(0, 10);
-                  fields[dateExternalId] = { start_date: ymd, end_date: ymd };
-                  const retry = hasTime
-                    ? { start_date: ymd, end_date: ymd }
-                    : { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` };
-
-                  console.warn('[LEADS] Reintentando con forma alternativa de rango →', retry);
-                
-                  // reconstruimos brevemente el payload y reintentamos
-                  const vendedorId =
-                    VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-                  const fieldsRetry = {
-                    'contacto-2': [{ item_id: currentState.contactItemId }],
-                    'telefono-busqueda': currentState.tempPhoneDigits,
-                    'vendedor-asignado-2': [vendedorId],
-                    'lead-status': [currentState.leadDraft.inquietud],
-                    'presupuesto-2': [currentState.leadDraft.presupuesto],
-                    busca: [currentState.leadDraft.busca],
-                    'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
-                    seguimiento: formatSeguimientoEntry('Lead creado desde WhatsApp.'),
-                    [dateExternalId]: retry,
-                  };
-                  const created2 = await createItemIn('leads', fieldsRetry);
-
-                  currentState.leadItemId = created2.item_id;
-                  currentState.step = 'awaiting_newlead_voice';
-                  delete currentState.lastInputType;
-
-                  await sendMessage(from, {
-                    type: 'text',
-                    text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-                  });
-                  await sendMessage(from, {
-                    type: 'text',
-                    text: {
-                      body: '🎙️ Dejá *un audio* (o texto) breve con lo conversado. Lo guardo en el seguimiento.',
-                    },
-                  });
-                  break; // salimos del catch
-                }
-              } catch (e2) {
-                console.error('[LEADS] Reintento falló:', e2?.response?.data || e2.message);
-              }
-            }
-
+            console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
             await sendMessage(from, {
               type: 'text',
               text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
