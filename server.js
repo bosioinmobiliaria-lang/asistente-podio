@@ -2337,21 +2337,21 @@ app.post('/whatsapp', async (req, res) => {
 
           const meta = await getLeadsFieldsMeta();
 
-          // 🔹 Campos del Lead
+          // -----------------------------------------------------------------
+          // ✅ SOLUCIÓN FINAL: Corregimos el formato de TODOS los campos de categoría
+          // En lugar de [id], el formato correcto es [{ value: id }]
+          // -----------------------------------------------------------------
           let fields = {
             'contacto-2': [{ item_id: currentState.contactItemId }],
             'telefono-busqueda': currentState.tempPhoneDigits,
             'vendedor-asignado-2': [vendedorId],
-            'lead-status': [currentState.leadDraft.inquietud],
-            'presupuesto-2': [currentState.leadDraft.presupuesto],
-            busca: [currentState.leadDraft.busca],
-            'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+            'lead-status': [{ value: currentState.leadDraft.inquietud }],
+            'presupuesto-2': [{ value: currentState.leadDraft.presupuesto }],
+            busca: [{ value: currentState.leadDraft.busca }],
+            'ideal-time-frame-of-sale': [{ value: currentState.leadDraft.expectativa }],
           };
 
-          // -----------------------------------------------------------------
-          // ✅ PRUEBA: Comentamos temporalmente TODO lo relacionado con la fecha
-          // -----------------------------------------------------------------
-          /*
+          // Restauramos la lógica de la fecha, que ahora sabemos que era inocente
           const dateFieldMeta = meta.find(f => f.type === 'date');
           const dateExternalId = dateFieldMeta?.external_id || null;
 
@@ -2359,10 +2359,8 @@ app.post('/whatsapp', async (req, res) => {
             const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
             fields[dateExternalId] = [podioDateObject];
           }
-          */
-          // -----------------------------------------------------------------
 
-          console.log('[LEADS] FINAL PAYLOAD (SIN FECHA) →', JSON.stringify({ fields }, null, 2));
+          console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
 
           const created = await createItemIn('leads', fields);
 
