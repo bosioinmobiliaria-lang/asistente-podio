@@ -2366,11 +2366,7 @@ app.post('/whatsapp', async (req, res) => {
             const dateFieldMeta = meta.find(f => f.type === 'date');
             const dateExternalId = dateFieldMeta?.external_id || null;
 
-            const created = await createLeadWithDateFallback(
-              fields,
-              dateExternalId,
-              fecha || new Date(),
-            );
+            const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
 
             if (fields[dateExternalId]) {
               console.log(
