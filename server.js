@@ -298,23 +298,33 @@ function ddmmyyyyFromStamp(stamp) {
   return `${D}/${M}/${Y}`;
 }
 async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
-  if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
-    return createItemIn('leads', fields);
+  const meta = await getLeadsFieldsMeta();
+  const ymd = (when instanceof Date ? when : new Date(when)).toISOString().slice(0, 10);
+
+  // 1) asegurá todos los date requeridos
+  const requiredDates = (meta || []).filter(f => f.type === 'date' && f.config?.required);
+  const withAllDates = { ...fields };
+  for (const f of requiredDates) {
+    const ext = f.external_id;
+    const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+    if (!withAllDates[ext]) {
+      withAllDates[ext] = needTime
+        ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+        : { start_date: ymd, end_date: ymd };
+    }
   }
 
-  const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
-  const ymd = dt.toISOString().slice(0, 10);
+  // 2) intentá sin hora y con hora para el campo principal (por si difiere la config)
   const stamp = `${ymd} 00:00:00`;
-
   const variants = [
-    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // sin hora
-    { [dateExternalId]: { start: stamp, end: stamp } }, // con hora
+    { [dateExternalId]: { start_date: ymd, end_date: ymd } },
+    { [dateExternalId]: { start: stamp, end: stamp } },
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
-      const payload = { ...fields, ...v };
+      const payload = { ...withAllDates, ...(dateExternalId ? v : {}) };
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -1258,25 +1268,52 @@ async function createItemIn(appName, fields) {
 
   if (appName === 'leads') {
     const meta = await getLeadsFieldsMeta();
-    const ymd = new Date().toISOString().slice(0, 10);
+    const dateFields = (meta || []).filter(f => f.type === 'date');
 
-    for (const f of (meta || []).filter(x => x.type === 'date' && x.config?.required)) {
+    for (const f of dateFields) {
       const ext = f.external_id;
-      const withTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-
       let v = payloadFields[ext];
 
-      // si vino como array (por herencia vieja), DES-empacalo
-      if (Array.isArray(v)) v = v[0];
+      const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
 
-      // si no vino nada y es requerido, rellená HOY (como OBJETO)
-      if (!v) {
-        v = withTime
+      // Si el campo es requerido y no vino, poné HOY
+      if (!v && f.config?.required) {
+        const ymd = new Date().toISOString().slice(0, 10);
+        v = needTime
           ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
           : { start_date: ymd, end_date: ymd };
       }
+      if (!v) continue;
 
-      payloadFields[ext] = v; // ← **objeto**, nunca array
+      // Si vino como array por error, tomá el primero
+      if (Array.isArray(v)) v = v[0];
+
+      // Normalizá claves según tenga hora o no
+      const norm = { ...v };
+      if (needTime) {
+        if (norm.start_date && !norm.start) norm.start = `${norm.start_date} 00:00:00`;
+        if (norm.end_date && !norm.end) norm.end = `${norm.end_date} 00:00:00`;
+        delete norm.start_date;
+        delete norm.end_date;
+        if (wantRange) {
+          if (norm.start && !norm.end) norm.end = norm.start;
+        } else {
+          delete norm.end;
+        }
+      } else {
+        if (norm.start && !norm.start_date) norm.start_date = String(norm.start).split(' ')[0];
+        if (norm.end && !norm.end_date) norm.end_date = String(norm.end).split(' ')[0];
+        delete norm.start;
+        delete norm.end;
+        if (wantRange) {
+          if (norm.start_date && !norm.end_date) norm.end_date = norm.start_date;
+        } else {
+          delete norm.end_date;
+        }
+      }
+
+      payloadFields[ext] = norm; // <-- OBJETO, no array
     }
   }
 
@@ -2378,16 +2415,6 @@ app.post('/whatsapp', async (req, res) => {
                 '[DEBUG] fecha (antes):',
                 Array.isArray(v) ? 'ARRAY' : 'OBJECT',
                 Array.isArray(v) ? Object.keys(v[0] || {}) : Object.keys(v),
-              );
-            }
-
-            // y dentro de createItemIn, ya con payloadFields normalizado:
-            const v2 = payloadFields[dateExternalId];
-            if (v2) {
-              console.log(
-                '[DEBUG] fecha (final):',
-                Array.isArray(v2) ? 'ARRAY' : 'OBJECT',
-                Array.isArray(v2) ? Object.keys(v2[0] || {}) : Object.keys(v2),
               );
             }
 
