@@ -127,6 +127,80 @@ function buildPodioDateRange(dfMeta, when = new Date()) {
   }
 }
 
+function getAsesorText(item) {
+  const f = (item?.fields || []).find(x => x.external_id === 'vendedor-asignado-2');
+  return f ? f.values?.[0]?.value?.text || '—' : '—';
+}
+function getLeadName(item) {
+  const f = (item?.fields || []).find(x => x.external_id === 'contacto-2');
+  return f ? f.values?.[0]?.value?.title || 'Sin nombre' : 'Sin nombre';
+}
+function formatDateYYYYMMDDToDDMMYYYY(d) {
+  try {
+    const date = new Date(d + ' UTC');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yy = date.getFullYear();
+    return `${dd}/${mm}/${yy}`;
+  } catch {
+    return d || '—';
+  }
+}
+function buildContactCheckText({ digits, contactItem, leadItem }) {
+  const inContacts = !!contactItem;
+  const inLeads = !!leadItem;
+
+  let name = '—';
+  if (contactItem?.title) name = contactItem.title;
+  else if (leadItem) name = getLeadName(leadItem);
+
+  const chunks = [];
+
+  if (inContacts && inLeads) {
+    chunks.push(`✅ *${name}*\n`);
+    chunks.push(
+      `• 📇 *En Contactos*\n` +
+        `  • Asesor: *${getAsesorText(contactItem)}*\n` +
+        `  • Cargado: *${formatDateYYYYMMDDToDDMMYYYY(contactItem.created_on)}*\n`,
+    );
+    chunks.push(
+      `• 🧲 *En Leads*\n` +
+        `  • Asesor: *${getAsesorText(leadItem)}*\n` +
+        `  • Cargado: *${formatDateYYYYMMDDToDDMMYYYY(leadItem.created_on)}*`,
+    );
+  } else if (inContacts && !inLeads) {
+    chunks.push(
+      `✅ El número pertenece a *${name}*.\n\n` +
+        `• 📇 *Contactos*\n` +
+        `  • Cargado por: *${getAsesorText(contactItem)}*\n` +
+        `  • Fecha: *${formatDateYYYYMMDDToDDMMYYYY(contactItem.created_on)}*\n\n` +
+        `• 🧲 *Leads*: *no está*`,
+    );
+  } else if (!inContacts && !inLeads) {
+    chunks.push(
+      `❌ No encontré registros para *${digits}*.\n\n` +
+        `¿Querés que cree un *Contacto* con ese número?`,
+    );
+  }
+
+  return chunks.join('\n');
+}
+async function sendNeedAnythingElse(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: '¿Necesitás algo más?' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'post_back_menu', title: '🏠 Menú principal' } },
+          { type: 'reply', reply: { id: 'post_cancel', title: '❌ Cancelar' } },
+        ],
+      },
+    },
+  });
+}
+
 // Normaliza TODAS las fechas que vayan en el payload de creación de LEADS.
 // - Convierte objetos sueltos a array
 // - Convierte "start_date"↔"start" según si el campo usa hora
@@ -788,12 +862,14 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🤖 Bosi — tu asistente' },
-      body: { text: 'Elegí una opción:' },
+      header: { type: 'text', text: '🤖 ¡Hola! Soy *Bosi*' },
+      body: {
+        text: 'Estoy para ayudarte ✨\n' + 'Elegí una opción para continuar:',
+      },
       footer: { text: 'Tip: escribí *cancelar* para salir' },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'menu_contact_check', title: '📇 Controlar contacto' } },
+          { type: 'reply', reply: { id: 'menu_controlar', title: '🧾 Controlar contacto' } },
           { type: 'reply', reply: { id: 'menu_actualizar', title: '🛠️ Actualizar Leads' } },
           { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } },
         ],
@@ -1896,59 +1972,57 @@ app.post('/whatsapp', async (req, res) => {
 
         // ===== 1) Verificar teléfono en Leads =====
         case 'awaiting_phone_to_check': {
-          console.log("==> PASO 1: Entrando al flujo 'awaiting_phone_to_check'.");
-          const phoneToCheck = input.replace(/\D/g, '');
+          const digits = (input || '').replace(/\D/g, '');
 
-          console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
-          const existingLeads = await searchLeadByPhone(phoneToCheck);
-          console.log(
-            `==> PASO 3: Búsqueda en Podio finalizada. Se encontraron ${existingLeads.length} leads.`,
-          );
+          if (!/^\d{10}$/.test(digits)) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '📱 Enviá el *celular* en formato 10 dígitos (sin 0/15).' },
+            });
+            break;
+          }
 
-          if (existingLeads.length > 0) {
-            // --- SI ENCUENTRA EL LEAD ---
-            console.log('==> PASO 4: Lead encontrado. Enviando resumen.');
-            const lead = existingLeads[0];
-            const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
-            const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
-            const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
-            const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
-            const creationDate = formatPodioDate(lead.created_on);
-            const lastActivityDays = calculateDaysSince(lead.last_event_on);
-            const responseText =
-              `✅ *Lead Encontrado*\n\n` +
-              `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
+          // Buscar en Contacts
+          const contacts = await searchContactByPhone(digits);
+          const contactItem = contacts?.[0] || null;
 
-            await sendMessage(from, { type: 'text', text: { body: responseText } });
-            delete userStates[numeroRemitente];
-          } else {
-            // --- NO ENCUENTRA EL LEAD ---
-            console.log('==> PASO 4: Lead no encontrado. Ofreciendo crear contacto.');
+          // Buscar en Leads
+          const leads = await searchLeadByPhone(digits);
+          const leadItem = leads?.[0] || null;
+
+          // Mensaje lindo
+          const msg = buildContactCheckText({ digits, contactItem, leadItem });
+          await sendMessage(from, { type: 'text', text: { body: msg } });
+
+          // CTA:
+          if (!contactItem && !leadItem) {
+            // Solo si NO existe en Contactos → ofrecer CREAR CONTACTO
             currentState.step = 'awaiting_creation_confirmation';
             currentState.data = {
-              phone: [{ type: 'mobile', value: phoneToCheck }],
-              'telefono-busqueda': phoneToCheck,
+              phone: [{ type: 'mobile', value: digits }],
+              'telefono-busqueda': digits,
             };
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: {
-                  text: `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Deseas crear un nuevo Contacto?`,
-                },
+                body: { text: '¿Querés crear el *Contacto* ahora?' },
                 action: {
                   buttons: [
                     {
                       type: 'reply',
-                      reply: { id: 'confirm_create_yes', title: 'Sí, crear ahora' },
+                      reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
                     },
-                    { type: 'reply', reply: { id: 'confirm_create_no', title: 'No, cancelar' } },
+                    { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
                   ],
                 },
               },
             });
+          } else {
+            // Si ya está en Contactos (y esté o no en Leads) → sólo menú/cancelar
+            await sendNeedAnythingElse(from);
+            delete userStates[numeroRemitente]; // cerramos el mini-flujo
           }
-          console.log("==> PASO 5: Flujo 'awaiting_phone_to_check' completado.");
           break;
         }
 
