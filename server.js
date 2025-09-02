@@ -401,14 +401,6 @@ function formatResults(properties, startIndex, batchSize = 5) {
 
     message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
     if (index < batch.length - 1) message += '\n\n----------\n\n';
-
-    const gasField = prop.fields.find(f => f.external_id === 'gas-natural');
-    const gasTxt = gasField ? gasField.values?.[0]?.value?.text : null;
-    // ...
-    const gas = gasTxt ? `🔥 Gas natural: *${gasTxt}*` : '';
-    // ...
-    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${gas}\n${link}`;
-
   });
 
   const hasMore = startIndex + batchSize < properties.length;
@@ -644,7 +636,7 @@ async function ensureLocalidadMap() {
   const field = (meta.fields || []).find(f => f.external_id === 'localidad');
   const opts = field?.config?.settings?.options || [];
 
-  const idBy = txt => (opts.find(o => (o.text || '').toLowerCase() === txt.toLowerCase())?.id);
+  const idBy = txt => opts.find(o => (o.text || '').toLowerCase() === txt.toLowerCase())?.id;
   LOCALIDAD_MAP_DYNAMIC = {
     1: idBy('Villa del Dique'),
     2: idBy('Villa Rumipal'),
@@ -788,6 +780,13 @@ async function getAppAccessTokenFor(appName = 'contactos') {
       await new Promise(r => setTimeout(r, delay));
     }
   }
+}
+
+function buildFiltersHint(filters = {}) {
+  const applied = [];
+  if (filters.localidad) applied.push('📍 Localidad');
+  if (typeof filters.gas === 'boolean') applied.push('🔥 Gas');
+  return applied.length ? `\nAplicados: ${applied.join(', ')}` : '';
 }
 
 // 🚀 NUEVA FUNCIÓN PARA ENVIAR MENSAJES CON META (VERSIÓN COMPATIBLE)
@@ -950,11 +949,34 @@ async function sendPropertyFilterButtons(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      body: { text: '¿Querés filtrar por localidad?' },
+      body: { text: '¿Cómo querés buscar?' },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'filter_loc', title: '📍 Por localidad' } },
-          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Seguir sin filtro' } },
+          { type: 'reply', reply: { id: 'filter_go', title: '🔧 Buscar con filtros' } },
+          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Seguir sin filtros' } },
+        ],
+      },
+    },
+  });
+}
+
+async function sendFiltersList(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: 'Elegí un *filtro*:' },
+      action: {
+        button: 'Elegir',
+        sections: [
+          {
+            title: 'Filtros disponibles',
+            rows: [
+              { id: 'f_loc', title: '📍 Por localidad' },
+              { id: 'f_gas', title: '🔥 Gas natural' },
+              { id: 'f_done', title: '✅ Listo (continuar)' },
+            ],
+          },
         ],
       },
     },
@@ -2184,14 +2206,30 @@ app.post('/whatsapp', async (req, res) => {
 
         // ===== Botones de filtro =====
         case 'awaiting_property_filter': {
-          if (input === 'filter_loc') {
-            currentState.step = 'awaiting_localidad';
-            await sendLocalidadList(from);
+          if (input === 'filter_go') {
+            currentState.step = 'filters_menu';
+            await sendFiltersList(from);
           } else if (input === 'filter_skip') {
-            currentState.step = 'awaiting_gas_filter';
-            await sendGasFilterButtons(from);
+            currentState.step = 'awaiting_price_range';
+            await sendPriceRangeList(from);
           } else {
             await sendPropertyFilterButtons(from);
+          }
+          break;
+        }
+
+        case 'filters_menu': {
+          if (input === 'f_loc') {
+            currentState.step = 'awaiting_localidad';
+            await sendLocalidadList(from);
+          } else if (input === 'f_gas') {
+            currentState.step = 'awaiting_gas_filter';
+            await sendGasFilterButtons(from);
+          } else if (input === 'f_done') {
+            currentState.step = 'awaiting_price_range';
+            await sendPriceRangeList(from);
+          } else {
+            await sendFiltersList(from);
           }
           break;
         }
@@ -2231,8 +2269,9 @@ app.post('/whatsapp', async (req, res) => {
             await sendGasFilterButtons(from);
             break;
           }
-          currentState.step = 'awaiting_price_range';
-          await sendPriceRangeList(from);
+          await sendMessage(from, { type: 'text', text: { body: '✅ Filtro de gas aplicado.' } });
+          currentState.step = 'filters_menu';
+          await sendFiltersList(from);
           break;
         }
 
