@@ -299,25 +299,39 @@ function ddmmyyyyFromStamp(stamp) {
   const [Y, M, D] = d.split('-');
   return `${D}/${M}/${Y}`;
 }
-async function createLeadWithDateFallback(fields, dateExternalId) {
-  const ymd = new Date().toISOString().slice(0, 10);
-
-  // A) rango SIN hora (start_date / end_date)  → ARRAY
-  const payloadA = { ...fields };
-  if (dateExternalId) {
-    payloadA[dateExternalId] = [{ start_date: ymd, end_date: ymd }];
+async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
+  // Si pidieron saltar fecha por env, creamos sin fecha
+  if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
+    return createItemIn('leads', fields);
   }
 
-  try {
-    return await createItemIn('leads', payloadA);
-  } catch (e) {
-    // B) rango CON hora 00:00:00 (start / end) → ARRAY
-    const payloadB = { ...fields };
-    if (dateExternalId) {
-      payloadB[dateExternalId] = [{ start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }];
+  const ymd = when.toISOString().slice(0, 10);
+  const stamp = `${ymd} 00:00:00`;
+
+  // Probamos en este orden, todos dentro de ARRAY (formato más aceptado):
+  const variants = [
+    // A) fecha sin hora (rango)
+    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] },
+    // B) fecha con hora (rango)
+    { [dateExternalId]: [{ start: stamp, end: stamp }] },
+    // C) fecha sin hora (solo start)
+    { [dateExternalId]: [{ start_date: ymd }] },
+    // D) fecha con hora (solo start)
+    { [dateExternalId]: [{ start: stamp }] },
+  ];
+
+  let lastErr;
+  for (const v of variants) {
+    try {
+      const payload = { ...fields, ...v };
+      console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
+      return await createItemIn('leads', payload);
+    } catch (e) {
+      lastErr = e;
+      console.error('[LEADS] Variante falló:', e?.response?.data || e.message);
     }
-    return await createItemIn('leads', payloadB);
   }
+  throw lastErr;
 }
 
 // Devuelve "DD/MM/AAAA: contenido" del último bloque del campo seguimiento
@@ -1270,6 +1284,24 @@ async function createItemIn(appName, fields) {
     );
   }
 
+  if (appName === 'leads') {
+    const df = (leadsMeta || []).filter(f => f.type === 'date');
+    console.log(
+      '[LEADS] Date fields meta →',
+      JSON.stringify(
+        df.map(f => ({
+          label: f.label,
+          external_id: f.external_id,
+          required: !!f.config?.required,
+          time: f?.config?.settings?.time || 'disabled',
+          end: f?.config?.settings?.end || 'disabled',
+        })),
+        null,
+        2,
+      ),
+    );
+  }
+
   // El resto de la función sigue igual...
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
 
@@ -1513,11 +1545,17 @@ app.post('/leads', async (req, res) => {
       req.query.skipDate === '1' ||
       req.headers['x-skip-date'] === '1';
 
+    let created;
     if (!skipDate && dateExternalId && (fecha || dateFieldMeta?.config?.required)) {
-      const d = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
-      fields[dateExternalId] = [d]; // Podio espera un ARRAY de objetos fecha
+      created = await createLeadWithDateFallback(
+        fields,
+        dateExternalId,
+        fecha ? new Date(fecha) : new Date(),
+      );
+    } else {
+      created = await createItemIn('leads', fields);
     }
-    const created = await createItemIn('leads', fields);
+
     res.status(201).json({ ok: true, item_id: created.item_id, message: 'Lead creado en Podio' });
   } catch (err) {
     console.error('\n[LEADS ERROR] =>', err?.response?.data || err.message);
@@ -1563,7 +1601,8 @@ app.post('/debug/leads/payload', async (req, res) => {
       ...(extras && typeof extras === 'object' ? extras : {}),
     });
     if (dateExternalId) {
-      fields[dateExternalId] = buildPodioDateForCreate(dateFieldMeta, fecha || new Date());
+      const ymd = (fecha ? new Date(fecha) : new Date()).toISOString().slice(0, 10);
+      fields[dateExternalId] = [{ start_date: ymd, end_date: ymd }];
     }
     res.json({ wouldSend: { fields }, dateExternalId, wantRange });
   } catch (err) {
@@ -2346,6 +2385,8 @@ app.post('/whatsapp', async (req, res) => {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
               'vendedor-asignado-2': [vendedorId],
+
+              // categorías:
               'lead-status': [currentState.leadDraft.inquietud],
               'presupuesto-2': [currentState.leadDraft.presupuesto],
               busca: [currentState.leadDraft.busca],
@@ -2357,13 +2398,10 @@ app.post('/whatsapp', async (req, res) => {
             const dateExternalId = dateFieldMeta?.external_id || null;
 
             if (dateExternalId) {
-              const podioDateObject = buildPodioDateForCreate(dateFieldMeta, new Date());
-              fields[dateExternalId] = [podioDateObject];
+              const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
             }
 
             console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
-
-            const created = await createItemIn('leads', fields);
 
             // ✅ OK
             currentState.leadItemId = created.item_id;
