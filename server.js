@@ -172,16 +172,14 @@ function normalizeLeadDateFieldsForCreate(fields, leadsMeta) {
 // Para CREAR items en Podio: siempre devolvemos un ARRAY con 1 objeto de RANGO COMPLETO.
 
 function buildPodioDateForCreate(dfMeta, when = new Date()) {
-  const ymd = when.toISOString().slice(0, 10);
+  const ymd = (when instanceof Date ? when : new Date(when)).toISOString().slice(0, 10);
   const wantTime = (dfMeta?.config?.settings?.time || 'disabled') !== 'disabled';
-  const FORCE = String(process.env.PODIO_LEADS_FORCE_RANGE || '') === '1';
-  const isRange = FORCE || (dfMeta?.config?.settings?.end || 'disabled') !== 'disabled';
 
   if (wantTime) {
     const stamp = `${ymd} 00:00:00`;
-    return isRange ? { start: stamp, end: stamp } : { start: stamp };
+    return { start: stamp, end: stamp }; // ← SIEMPRE rango con hora
   } else {
-    return isRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
+    return { start_date: ymd, end_date: ymd }; // ← SIEMPRE rango sin hora
   }
 }
 
@@ -300,30 +298,25 @@ function ddmmyyyyFromStamp(stamp) {
   return `${D}/${M}/${Y}`;
 }
 async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
-  // Si pidieron saltar fecha por env, creamos sin fecha
   if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
     return createItemIn('leads', fields);
   }
 
-  const ymd = when.toISOString().slice(0, 10);
+  // Normalizá 'when' por si viene string
+  const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
+  const ymd = dt.toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
-  // Probamos en este orden, todos dentro de ARRAY (formato más aceptado):
+  // Solo rangos (array de 1 objeto)
   const variants = [
-    // A) fecha sin hora (rango)
-    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] },
-    // B) fecha con hora (rango)
-    { [dateExternalId]: [{ start: stamp, end: stamp }] },
-    // C) fecha sin hora (solo start)
-    { [dateExternalId]: [{ start_date: ymd }] },
-    // D) fecha con hora (solo start)
-    { [dateExternalId]: [{ start: stamp }] },
+    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] }, // sin hora
+    { [dateExternalId]: [{ start: stamp, end: stamp }] }, // con hora
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
-      const payload = { ...fields, ...v };
+      const payload = { ...fields, ...v }; // v pisa lo que venga en fields[dateExternalId]
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -1266,34 +1259,34 @@ async function createItemIn(appName, fields) {
 
   let payloadFields = cleanDeep(fields);
 
-if (appName === 'leads') {
-  const leadsMeta = await getLeadsFieldsMeta();
+  if (appName === 'leads') {
+    const leadsMeta = await getLeadsFieldsMeta();
 
-  // Log corto (no sale del scope)
-  const df = (leadsMeta || []).find(f => f.type === 'date');
-  const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
-  const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
-  console.log(
-    '[LEADS] Date ext:',
-    df?.external_id,
-    '| wantTime=',
-    wantTime,
-    ' | wantRange=',
-    wantRange,
-  );
+    // Log corto (no sale del scope)
+    const df = (leadsMeta || []).find(f => f.type === 'date');
+    const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
+    const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+    console.log(
+      '[LEADS] Date ext:',
+      df?.external_id,
+      '| wantTime=',
+      wantTime,
+      ' | wantRange=',
+      wantRange,
+    );
 
-  // (opcional) log extendido, pero SIEMPRE usando la misma variable local
-  const dateFieldsInfo = (leadsMeta || [])
-    .filter(f => f.type === 'date')
-    .map(f => ({
-      label: f.label,
-      external_id: f.external_id,
-      required: !!f.config?.required,
-      time: f?.config?.settings?.time || 'disabled',
-      end: f?.config?.settings?.end || 'disabled',
-    }));
-  console.log('[LEADS] Date fields meta →', JSON.stringify(dateFieldsInfo, null, 2));
-}
+    // (opcional) log extendido, pero SIEMPRE usando la misma variable local
+    const dateFieldsInfo = (leadsMeta || [])
+      .filter(f => f.type === 'date')
+      .map(f => ({
+        label: f.label,
+        external_id: f.external_id,
+        required: !!f.config?.required,
+        time: f?.config?.settings?.time || 'disabled',
+        end: f?.config?.settings?.end || 'disabled',
+      }));
+    console.log('[LEADS] Date fields meta →', JSON.stringify(dateFieldsInfo, null, 2));
+  }
 
   // El resto de la función sigue igual...
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
@@ -1593,10 +1586,6 @@ app.post('/debug/leads/payload', async (req, res) => {
       seguimiento: seguimiento || undefined,
       ...(extras && typeof extras === 'object' ? extras : {}),
     });
-    if (dateExternalId) {
-      const ymd = (fecha ? new Date(fecha) : new Date()).toISOString().slice(0, 10);
-      fields[dateExternalId] = [{ start_date: ymd, end_date: ymd }];
-    }
     res.json({ wouldSend: { fields }, dateExternalId, wantRange });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.response?.data || err.message });
@@ -2390,9 +2379,11 @@ app.post('/whatsapp', async (req, res) => {
             const dateFieldMeta = meta.find(f => f.type === 'date');
             const dateExternalId = dateFieldMeta?.external_id || null;
 
-            if (dateExternalId) {
-              const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
-            }
+            const created = await createLeadWithDateFallback(
+              fields,
+              dateExternalId,
+              fecha || new Date(),
+            );
 
             console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
 
