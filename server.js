@@ -401,6 +401,14 @@ function formatResults(properties, startIndex, batchSize = 5) {
 
     message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
     if (index < batch.length - 1) message += '\n\n----------\n\n';
+
+    const gasField = prop.fields.find(f => f.external_id === 'gas-natural');
+    const gasTxt = gasField ? gasField.values?.[0]?.value?.text : null;
+    // ...
+    const gas = gasTxt ? `🔥 Gas natural: *${gasTxt}*` : '';
+    // ...
+    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${gas}\n${link}`;
+
   });
 
   const hasMore = startIndex + batchSize < properties.length;
@@ -607,6 +615,46 @@ async function transcribeAudioFromMeta(mediaId) {
   }
 }
 
+// Cache simple para opciones de categoría por texto
+const _optionIdCache = {};
+
+/** Busca el ID de opción de un campo categoría por su texto (case-insensitive). */
+async function getCategoryOptionIdPropiedades(fieldExternalId, label) {
+  const key = `${fieldExternalId}::${(label || '').toLowerCase()}`;
+  if (_optionIdCache[key]) return _optionIdCache[key];
+
+  const meta = await getAppMeta(process.env.PODIO_PROPIEDADES_APP_ID, 'propiedades');
+  const field = (meta.fields || []).find(f => f.external_id === fieldExternalId);
+  const opt = field?.config?.settings?.options?.find(
+    o => (o.text || '').toLowerCase() === (label || '').toLowerCase(),
+  );
+  if (opt) {
+    _optionIdCache[key] = opt.id;
+    return opt.id;
+  }
+  return null;
+}
+
+// Construye LOCALIDAD_MAP con IDs reales de Podio (por texto)
+let LOCALIDAD_MAP_DYNAMIC = {};
+async function ensureLocalidadMap() {
+  if (Object.keys(LOCALIDAD_MAP_DYNAMIC).length) return LOCALIDAD_MAP_DYNAMIC;
+
+  const meta = await getAppMeta(process.env.PODIO_PROPIEDADES_APP_ID, 'propiedades');
+  const field = (meta.fields || []).find(f => f.external_id === 'localidad');
+  const opts = field?.config?.settings?.options || [];
+
+  const idBy = txt => (opts.find(o => (o.text || '').toLowerCase() === txt.toLowerCase())?.id);
+  LOCALIDAD_MAP_DYNAMIC = {
+    1: idBy('Villa del Dique'),
+    2: idBy('Villa Rumipal'),
+    3: idBy('Santa Rosa'),
+    4: idBy('Amboy'),
+    5: idBy('San Ignacio'),
+  };
+  return LOCALIDAD_MAP_DYNAMIC;
+}
+
 /** Resumen compacto del Lead para WhatsApp (incluye último seguimiento limpio) */
 function formatLeadInfoSummary(leadItem) {
   if (!leadItem) return 'No encontré info del lead.';
@@ -771,6 +819,23 @@ async function sendMessage(to, messageData) {
       error.response ? JSON.stringify(error.response.data, null, 2) : error.message,
     );
   }
+}
+
+async function sendGasFilterButtons(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: '¿Filtrar por *Gas natural*?' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'gas_yes', title: '✅ Sí' } },
+          { type: 'reply', reply: { id: 'gas_no', title: '🚫 No' } },
+          { type: 'reply', reply: { id: 'gas_any', title: '🔄 Cualquiera' } },
+        ],
+      },
+    },
+  });
 }
 
 // === MENÚ PRINCIPAL (con header y footer) ===
@@ -1134,9 +1199,21 @@ async function searchProperties(filters) {
 
   const podioFilters = { estado: [ID_ESTADO_DISPONIBLE] };
 
+  // Precio (número): {from, to}
   if (filters.precio) podioFilters['valor-de-la-propiedad'] = filters.precio;
+
+  // Localidad (categoría): [optionId]
   if (filters.localidad) podioFilters['localidad'] = [filters.localidad];
+
+  // Tipo (si ya lo tenías mapeado)
   if (filters.tipo) podioFilters['tipo-de-propiedad'] = [filters.tipo];
+
+  // Gas natural (categoría Sí/No)
+  if (typeof filters.gas === 'boolean') {
+    const label = filters.gas ? 'Sí' : 'No'; // ajustá si tus opciones son "Si/No", "Con/Sin", etc.
+    const gasId = await getCategoryOptionIdPropiedades('gas-natural', label);
+    if (gasId) podioFilters['gas-natural'] = [gasId];
+  }
 
   console.log('--- FILTROS ENVIADOS A PODIO ---');
   console.log(JSON.stringify({ filters: podioFilters }, null, 2));
@@ -1147,7 +1224,7 @@ async function searchProperties(filters) {
       `https://api.podio.com/item/app/${appId}/filter/`,
       {
         filters: podioFilters,
-        limit: 20, // ✅ LÍMITE AUMENTADO A 20
+        limit: 20,
         sort_by: 'created_on',
         sort_desc: true,
       },
@@ -1249,7 +1326,7 @@ async function sendFarewell(to) {
   const key = 'whatsapp:+' + to;
   const name = ASESOR_NOMBRE_MAP[key] || USER_NAME_MAP[key];
   const msg = name
-    ? `✨ Fue un gusto ayudarte, *${name}*. Cuando quieras, escribime. 🙌`
+    ? `✨ Fue un gusto ayudarte *${name}*. Cuando quieras, escribime. 🙌`
     : '✨ Fue un gusto ayudarte. Cuando quieras, escribime. 🙌';
   await sendMessage(to, { type: 'text', text: { body: msg } });
 }
@@ -2111,8 +2188,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'awaiting_localidad';
             await sendLocalidadList(from);
           } else if (input === 'filter_skip') {
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
+            currentState.step = 'awaiting_gas_filter';
+            await sendGasFilterButtons(from);
           } else {
             await sendPropertyFilterButtons(from);
           }
@@ -2126,8 +2203,10 @@ app.post('/whatsapp', async (req, res) => {
             await sendLocalidadList(from);
             break;
           }
-          const locKey = m[1]; // "1".."5"
-          const locId = LOCALIDAD_MAP[locKey];
+
+          await ensureLocalidadMap();
+          const locKey = m[1];
+          const locId = LOCALIDAD_MAP_DYNAMIC[locKey];
           if (!locId) {
             await sendLocalidadList(from);
             break;
@@ -2136,6 +2215,22 @@ app.post('/whatsapp', async (req, res) => {
           currentState.filters = currentState.filters || {};
           currentState.filters.localidad = locId;
 
+          currentState.step = 'awaiting_gas_filter';
+          await sendGasFilterButtons(from);
+          break;
+        }
+
+        case 'awaiting_gas_filter': {
+          if (input === 'gas_yes') {
+            currentState.filters.gas = true;
+          } else if (input === 'gas_no') {
+            currentState.filters.gas = false;
+          } else if (input === 'gas_any') {
+            delete currentState.filters.gas; // no filtrar por gas
+          } else {
+            await sendGasFilterButtons(from);
+            break;
+          }
           currentState.step = 'awaiting_price_range';
           await sendPriceRangeList(from);
           break;
