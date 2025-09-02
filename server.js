@@ -2382,8 +2382,9 @@ app.post('/whatsapp', async (req, res) => {
             const created = await createLeadWithDateFallback(
               fields,
               dateExternalId,
-              fecha || new Date(),
+              new Date(), // usar ahora por defecto (o una fecha guardada en el state si la tuvieras)
             );
+
 
             console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
 
