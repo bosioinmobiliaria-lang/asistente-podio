@@ -775,18 +775,24 @@ async function sendMessage(to, messageData) {
 
 // === MENÚ PRINCIPAL (con header y footer) ===
 async function sendMainMenu(to) {
+  const key = 'whatsapp:+' + to;
+  const name = ASESOR_NOMBRE_MAP[key];
+  const saludo = name
+    ? `¡Hola, *${name}*! 👋 Soy *Bosi*. ¿En qué te doy una mano hoy?`
+    : '¡Hola! 👋 Soy *Bosi*. ¿En qué te doy una mano hoy?';
+
   await sendMessage(to, {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🤖 Bosi — tu asistente personal' },
-      body: { text: 'Elegí una opción 👇' },
+      header: { type: 'text', text: '🤖 Bosi — tu asistente' },
+      body: { text: `${saludo}\nElegí una opción:` },
       footer: { text: 'Tip: escribí *cancelar* para salir' },
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'menu_check_contact', title: '📇 Chequear contacto' } },
-          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar leads' } }, // (ya funcionaba)
-          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } }, // (ya funcionaba)
+          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar leads' } },
+          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } },
         ],
       },
     },
@@ -1706,6 +1712,18 @@ const PRICE_RANGES_10 = {
   10: { from: 200000, to: 99999999, next: true }, // dispara sub-lista alta
 };
 
+// 👤 Nombre por número (para saludo personalizado)
+const ASESOR_NOMBRE_MAP = {
+  'whatsapp:+5493571605532': 'Diego',
+  'whatsapp:+5493546560311': 'Este',
+  'whatsapp:+5493546490249': 'Este',
+  'whatsapp:+5493546549847': 'Maxi',
+  'whatsapp:+5493546452443': 'Gabi',
+  'whatsapp:+5493546545121': 'Carlos',
+  'whatsapp:+5493546513759': 'Santi',
+  'whatsapp:+5493512846059': 'Debo',
+};
+
 // --- Rangos altos (si eligen > 200k) ---
 const PRICE_RANGES_HIGH = {
   h1: { from: 200000, to: 300000 },
@@ -1875,7 +1893,7 @@ app.post('/whatsapp', async (req, res) => {
           await sendMessage(from, {
             type: 'text',
             text: {
-              body: `✅ Datos ok\n\n• Nombre: ${nombre}\n• Tel.: ${telefono}\n• Tipo: ${tipoTexto}`,
+              body: `✅ Datos ok\n\n• *Nombre:* ${nombre}\n• *Tel.:* ${telefono}\n• *Tipo:* ${tipoTexto}`,
             },
           });
 
@@ -2029,7 +2047,7 @@ app.post('/whatsapp', async (req, res) => {
             await createItemIn('contactos', currentState.data);
             await sendMessage(from, {
               type: 'text',
-              text: { body: '🎉 Contacto creado y asignado.' },
+              text: { body: '✅ *Contacto creado y asignado.*' },
             });
           } catch (e) {
             await sendMessage(from, {
@@ -2697,34 +2715,31 @@ app.post('/whatsapp', async (req, res) => {
 
           currentState.tempPhoneDigits = digits;
 
-          // Buscar en Contactos y Leads
-          const [contacts, leads] = await Promise.all([
+          const [contacts = [], leads = []] = await Promise.all([
             searchContactByPhone(digits),
             searchLeadByPhone(digits),
           ]);
 
-          const c = (contacts || [])[0];
-          const l = (leads || [])[0];
-
-          // Helpers para mostrar asesor/fecha
           const getAsesor = item => {
             const f = (item?.fields || []).find(x => x.external_id === 'vendedor-asignado-2');
             return f?.values?.[0]?.value?.text || '—';
-            // Si quisieras el usuario creador real: item.created_by?.name (a veces viene)
           };
-          const fecha = item => formatPodioDate(item?.created_on);
+          const hace = item => calculateDaysSince(item?.created_on); // 'hoy' / 'hace X días'
 
-          if (c && !l) {
-            // a) En contactos, no en leads
+          const listRefs = items =>
+            items.map(it => `• ${getAsesor(it)} — cargado ${hace(it)}`).join('\n');
+
+          if (contacts.length && !leads.length) {
+            // a) En Contactos, no en Leads
+            const header =
+              contacts.length === 1
+                ? '✅ *Cliente encontrado en Contactos*'
+                : `✅ *Cliente encontrado en Contactos* (${contacts.length} registros)`;
+            const detalle = listRefs(contacts);
+
             await sendMessage(from, {
               type: 'text',
-              text: {
-                body:
-                  `✅ *Cliente encontrado en Contactos*\n` +
-                  `• Cargado: ${fecha(c)}\n` +
-                  `• Asesor: ${getAsesor(c)}\n\n` +
-                  `🚫 *No aparece en Leads.*`,
-              },
+              text: { body: `${header}\n${detalle}\n\n🚫 *No aparece en Leads.*` },
             });
 
             currentState.step = 'check_contact_choices';
@@ -2747,19 +2762,18 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          if (c && l) {
-            // b) En contactos y en leads
+          if (contacts.length && leads.length) {
+            // b) En Contactos y en Leads
+            const headerC =
+              contacts.length === 1
+                ? '✅ *En Contactos*'
+                : `✅ *En Contactos* (${contacts.length})`;
+            const headerL =
+              leads.length === 1 ? '✅ *En Leads*' : `✅ *En Leads* (${leads.length})`;
+
             await sendMessage(from, {
               type: 'text',
-              text: {
-                body:
-                  `✅ *Cliente en Contactos*\n` +
-                  `• Cargado: ${fecha(c)}\n` +
-                  `• Asesor: ${getAsesor(c)}\n\n` +
-                  `✅ *También en Leads*\n` +
-                  `• Cargado: ${fecha(l)}\n` +
-                  `• Asesor: ${getAsesor(l)}`,
-              },
+              text: { body: `${headerC}\n${listRefs(contacts)}\n\n${headerL}\n${listRefs(leads)}` },
             });
 
             currentState.step = 'check_contact_choices';
@@ -2779,7 +2793,7 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // c) No está en contactos ni en leads
+          // c) No está en Contactos ni en Leads
           await sendMessage(from, {
             type: 'text',
             text: { body: '🔎 *No encontré* ningún contacto ni lead con ese número.' },
