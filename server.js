@@ -915,7 +915,7 @@ async function sendMainMenu(to) {
       footer: { text: 'Tip: escribí cancelar para salir' }, // sin asteriscos
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'menu_controlar', title: '🧾 Controlar contacto' } },
+          { type: 'reply', reply: { id: 'menu_controlar', title: '🧾 Checkear contacto' } },
           { type: 'reply', reply: { id: 'menu_actualizar', title: '🛠️ Actualizar Leads' } },
           { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } },
         ],
@@ -1016,7 +1016,7 @@ async function sendPropertyFilterButtons(to) {
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'filter_loc', title: '📍 Por localidad' } },
-          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Seguir sin filtro' } },
+          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Sin filtro' } },
         ],
       },
     },
