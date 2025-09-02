@@ -1940,8 +1940,8 @@ app.post('/whatsapp', async (req, res) => {
     const low = (input || '').toLowerCase(); // ← evita crash si input es undefined
     if (low === 'cancelar' || low === 'volver') {
       delete userStates[numeroRemitente];
-      await sendFarewell(from);
-      return; // ← no seguimos, no mostramos menú
+      await sendMainMenu(from);
+      return;
     } else if (currentState) {
       console.log('--- ESTADO ACTUAL ---', JSON.stringify(currentState, null, 2)); // <-- AGREGA ESTA LÍNEA
       switch (currentState.step) {
@@ -2079,8 +2079,8 @@ app.post('/whatsapp', async (req, res) => {
               text: { body: '✍️ Decime *Nombre y Apellido*.' },
             });
           } else if (input === 'confirm_create_no' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
             break; // ← no menú
           } else {
             await sendMessage(from, {
@@ -2354,8 +2354,8 @@ app.post('/whatsapp', async (req, res) => {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
           } else if (input === 'post_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
           } else {
             // Repetimos opciones si escribe otra cosa
             await sendPostResultsOptions(from);
@@ -2369,8 +2369,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'awaiting_price_range';
             await sendPriceRangeList(from);
           } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
             break; // ← no menú
           } else {
             // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
@@ -2401,8 +2401,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.leadDraft = {};
             await sendInquietudList(from);
           } else if (input === 'create_lead_no' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
           } else {
             // re-mostrar botones
             const name = currentState.contactItemId ? 'Contacto' : '';
@@ -2826,8 +2826,8 @@ app.post('/whatsapp', async (req, res) => {
         // === 4.2 Ofrecer crear LEAD desde un contacto existente ===
         case 'contact_check_offer_create_lead': {
           if (input === 'cc_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
             break;
           }
           if (input === 'cc_back_menu') {
@@ -2893,8 +2893,8 @@ app.post('/whatsapp', async (req, res) => {
         // === 4.3 Ofrecer crear CONTACTO cuando no existe ===
         case 'contact_check_offer_create_contact': {
           if (input === 'cc_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
             break;
           }
           if (input === 'cc_back_menu') {
@@ -3023,8 +3023,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'create_lead_inquietud';
             await sendInquietudList(from);
           } else if (input === 'create_lead_no' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+   delete userStates[numeroRemitente];
+   await sendMainMenu(from);
           } else {
             await sendMessage(from, {
               type: 'text',
