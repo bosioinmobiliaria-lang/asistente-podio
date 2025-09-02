@@ -298,34 +298,27 @@ function ddmmyyyyFromStamp(stamp) {
   return `${D}/${M}/${Y}`;
 }
 async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
-  // Si no hay campo fecha o pediste saltearlo → crear sin fecha
+  // Si pediste saltar fecha por env, creamos sin fecha
   if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
     return createItemIn('leads', fields);
   }
 
-  // Normalizar fecha base
   const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
   const ymd = dt.toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
-  // PROBAR 6 VARIANTES (objeto/array × sin hora/con hora × single/range)
+  // 👇 SIEMPRE OBJETO (no array)
   const variants = [
-    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // obj sin hora (range)
-    { [dateExternalId]: { start: stamp, end: stamp } }, // obj con hora (range)
-    { [dateExternalId]: { start_date: ymd } }, // obj sin hora (single)
-    { [dateExternalId]: { start: stamp } }, // obj con hora (single)
-    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] }, // array sin hora (range)
-    { [dateExternalId]: [{ start: stamp, end: stamp }] }, // array con hora (range)
+    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // sin hora, rango
+    { [dateExternalId]: { start: stamp, end: stamp } }, // con hora, rango
+    { [dateExternalId]: { start_date: ymd } }, // sin hora, solo start
+    { [dateExternalId]: { start: stamp } }, // con hora, solo start
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
-      // Asegurar que no hay una clave 'undefined' por accidente
-      const key = Object.keys(v)[0];
-      if (!key || key === 'undefined' || key === 'null') throw new Error('dateExternalId inválido');
-
-      const payload = { ...fields, ...v };
+      const payload = { ...fields, ...v }; // v pisa lo anterior
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -2376,9 +2369,16 @@ app.post('/whatsapp', async (req, res) => {
             const created = await createLeadWithDateFallback(
               fields,
               dateExternalId,
-              new Date(), // usar ahora por defecto (o una fecha guardada en el state si la tuvieras)
+              fecha || new Date(),
             );
 
+            if (fields[dateExternalId]) {
+              console.log(
+                '[DEBUG] shape fecha:',
+                Array.isArray(fields[dateExternalId]) ? 'ARRAY' : typeof fields[dateExternalId],
+                JSON.stringify(fields[dateExternalId]),
+              );
+            }
 
             console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
 
