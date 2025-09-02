@@ -777,16 +777,14 @@ async function sendMessage(to, messageData) {
 async function sendMainMenu(to) {
   const key = 'whatsapp:+' + to;
   const name = ASESOR_NOMBRE_MAP[key];
-  const saludo = name
-    ? `¡Hola, *${name}*! 👋 Soy *Bosi*. ¿En qué te doy una mano hoy?`
-    : '¡Hola! 👋 Soy *Bosi*. ¿En qué te doy una mano hoy?';
+  const saludo = name ? `¡Hola, *${name}*! 👋` : '¡Hola! 👋';
 
   await sendMessage(to, {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🤖 Bosi — tu asistente' },
-      body: { text: `${saludo}\nElegí una opción:` },
+      // 👇 sin header
+      body: { text: `${saludo} ¿Qué hacemos hoy?\nElegí una opción:` },
       footer: { text: 'Tip: escribí *cancelar* para salir' },
       action: {
         buttons: [
