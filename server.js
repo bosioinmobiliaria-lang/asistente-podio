@@ -9,54 +9,6 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- Sanitizado para WhatsApp Cloud API (sin Markdown en headers/footers/títulos) ---
-const MAX_HEADER_LEN = 60;
-const MAX_FOOTER_LEN = 60;
-const MAX_BUTTON_TITLE = 20;
-const MAX_LIST_TITLE = 24;
-const MAX_LIST_BUTTON = 20;
-
-function stripMarkdownLite(s) {
-  return (s || '')
-    .replace(/[*_~`>|]/g, '') // quita MD básico
-    .replace(/\n/g, ' ')       // header/footer no aceptan saltos de línea
-    .trim();
-}
-
-function sanitizeInteractive(i) {
-  if (!i) return i;
-
-  if (i.header?.type === 'text' && typeof i.header.text === 'string') {
-    i.header.text = stripMarkdownLite(i.header.text).slice(0, MAX_HEADER_LEN);
-  }
-  if (i.footer?.text) {
-    i.footer.text = stripMarkdownLite(i.footer.text).slice(0, MAX_FOOTER_LEN);
-  }
-
-  // Botonera
-  if (Array.isArray(i.action?.buttons)) {
-    i.action.buttons.forEach(b => {
-      if (b?.reply?.title) b.reply.title = stripMarkdownLite(b.reply.title).slice(0, MAX_BUTTON_TITLE);
-    });
-  }
-
-  // Listas
-  if (i.type === 'list' && i.action) {
-    if (i.action.button) i.action.button = stripMarkdownLite(i.action.button).slice(0, MAX_LIST_BUTTON);
-    if (Array.isArray(i.action.sections)) {
-      i.action.sections.forEach(sec => {
-        if (sec.title) sec.title = stripMarkdownLite(sec.title).slice(0, MAX_LIST_TITLE);
-        if (Array.isArray(sec.rows)) {
-          sec.rows.forEach(r => {
-            if (r.title) r.title = stripMarkdownLite(r.title).slice(0, MAX_LIST_TITLE);
-          });
-        }
-      });
-    }
-  }
-  return i;
-}
-
 // ----------------------------------------
 // Helpers
 // ----------------------------------------
@@ -99,15 +51,6 @@ function addHours(timeStr, hoursToAdd = 1) {
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   const ss = String(d.getUTCSeconds()).padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
-}
-
-function getCategoryText(item, externalId) {
-  const f = (item?.fields || []).find(x => x.external_id === externalId);
-  return f?.values?.[0]?.value?.text || '';
-}
-
-function getContactTitle(item) {
-  return item?.title || 'Sin nombre';
 }
 
 /** Construye objeto de fecha para Podio; soporta fecha simple o rango. */
@@ -173,80 +116,6 @@ function buildPodioDateRange(dfMeta, when = new Date()) {
   } else {
     return { start_date: ymd, end_date: ymd };
   }
-}
-
-function getAsesorText(item) {
-  const f = (item?.fields || []).find(x => x.external_id === 'vendedor-asignado-2');
-  return f ? f.values?.[0]?.value?.text || '—' : '—';
-}
-function getLeadName(item) {
-  const f = (item?.fields || []).find(x => x.external_id === 'contacto-2');
-  return f ? f.values?.[0]?.value?.title || 'Sin nombre' : 'Sin nombre';
-}
-function formatDateYYYYMMDDToDDMMYYYY(d) {
-  try {
-    const date = new Date(d + ' UTC');
-    const dd = String(date.getDate()).padStart(2, '0');
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const yy = date.getFullYear();
-    return `${dd}/${mm}/${yy}`;
-  } catch {
-    return d || '—';
-  }
-}
-function buildContactCheckText({ digits, contactItem, leadItem }) {
-  const inContacts = !!contactItem;
-  const inLeads = !!leadItem;
-
-  let name = '—';
-  if (contactItem?.title) name = contactItem.title;
-  else if (leadItem) name = getLeadName(leadItem);
-
-  const chunks = [];
-
-  if (inContacts && inLeads) {
-    chunks.push(`✅ *${name}*\n`);
-    chunks.push(
-      `• 📇 *En Contactos*\n` +
-        `  • Asesor: *${getAsesorText(contactItem)}*\n` +
-        `  • Cargado: *${formatDateYYYYMMDDToDDMMYYYY(contactItem.created_on)}*\n`,
-    );
-    chunks.push(
-      `• 🧲 *En Leads*\n` +
-        `  • Asesor: *${getAsesorText(leadItem)}*\n` +
-        `  • Cargado: *${formatDateYYYYMMDDToDDMMYYYY(leadItem.created_on)}*`,
-    );
-  } else if (inContacts && !inLeads) {
-    chunks.push(
-      `✅ El número pertenece a *${name}*.\n\n` +
-        `• 📇 *Contactos*\n` +
-        `  • Cargado por: *${getAsesorText(contactItem)}*\n` +
-        `  • Fecha: *${formatDateYYYYMMDDToDDMMYYYY(contactItem.created_on)}*\n\n` +
-        `• 🧲 *Leads*: *no está*`,
-    );
-  } else if (!inContacts && !inLeads) {
-    chunks.push(
-      `❌ No encontré registros para *${digits}*.\n\n` +
-        `¿Querés que cree un *Contacto* con ese número?`,
-    );
-  }
-
-  return chunks.join('\n');
-}
-async function sendNeedAnythingElse(to) {
-  await sendMessage(to, {
-    type: 'interactive',
-    interactive: {
-      type: 'button',
-      body: { text: '¿Necesitás algo más?' },
-      action: {
-        buttons: [
-          { type: 'reply', reply: { id: 'post_back_menu', title: '🏠 Menú principal' } },
-          { type: 'reply', reply: { id: 'post_cancel', title: '❌ Cancelar' } },
-        ],
-      },
-    },
-  });
 }
 
 // Normaliza TODAS las fechas que vayan en el payload de creación de LEADS.
@@ -878,16 +747,16 @@ async function sendMessage(to, messageData) {
   const API_VERSION = 'v19.0';
   const url = `https://graph.facebook.com/${API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`;
 
-  const basePayload = { messaging_product: 'whatsapp', to };
+  // CAMBIO: Se construye el payload de una forma más tradicional para mayor compatibilidad.
+  const basePayload = {
+    messaging_product: 'whatsapp',
+    to: to,
+  };
   const payload = Object.assign(basePayload, messageData);
-
-  // ⛑️ Sanitiza cualquier interactivo (remueve Markdown de header/footer/títulos)
-  if (payload.type === 'interactive' && payload.interactive) {
-    payload.interactive = sanitizeInteractive(payload.interactive);
-  }
 
   console.log('Enviando mensaje a Meta:', JSON.stringify(payload, null, 2));
 
+  // El resto de la función es idéntica
   try {
     await axios.post(url, payload, {
       headers: {
@@ -910,14 +779,24 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🤖 ¡Hola! Soy Bosi' }, // sin asteriscos
-      body: { text: 'Estoy para ayudarte ✨\nElegí una opción para continuar:' },
-      footer: { text: 'Tip: escribí cancelar para salir' }, // sin asteriscos
+      header: {
+        // ← nuevo header
+        type: 'text',
+        text: '🤖 Bosi — tu asistente personal',
+      },
+      body: {
+        // ← copy más cálido
+        text: 'Hola, soy *Bosi* 👋 ¿qué te gustaría hacer?',
+      },
+      footer: {
+        // ← pista mínima
+        text: 'Tip: escribí *cancelar* para volver al menú',
+      },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'menu_controlar', title: '🧾 Checkear contacto' } },
-          { type: 'reply', reply: { id: 'menu_actualizar', title: '🛠️ Actualizar Leads' } },
-          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } },
+          { type: 'reply', reply: { id: 'menu_verificar', title: '✅ Verificar Lead' } },
+          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar Propiedad' } },
+          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar Lead' } },
         ],
       },
     },
@@ -1016,7 +895,7 @@ async function sendPropertyFilterButtons(to) {
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'filter_loc', title: '📍 Por localidad' } },
-          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Sin filtro' } },
+          { type: 'reply', reply: { id: 'filter_skip', title: '⏭️ Seguir sin filtro' } },
         ],
       },
     },
@@ -1760,6 +1639,8 @@ app.get('/', (_req, res) =>
 // ----------------------------------------
 // Webhook para WhatsApp (LÓGICA CONVERSACIONAL Y RÁPIDA v11.0)
 // ----------------------------------------
+const twilio = require('twilio');
+const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const userStates = {}; // "Memoria" del bot
 
@@ -1940,8 +1821,8 @@ app.post('/whatsapp', async (req, res) => {
     const low = (input || '').toLowerCase(); // ← evita crash si input es undefined
     if (low === 'cancelar' || low === 'volver') {
       delete userStates[numeroRemitente];
-      await sendMainMenu(from);
-      return;
+      await sendFarewell(from);
+      return; // ← no seguimos, no mostramos menú
     } else if (currentState) {
       console.log('--- ESTADO ACTUAL ---', JSON.stringify(currentState, null, 2)); // <-- AGREGA ESTA LÍNEA
       switch (currentState.step) {
@@ -2015,59 +1896,60 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         // ===== 1) Verificar teléfono en Leads =====
-
         case 'awaiting_phone_to_check': {
-          const digits = (input || '').replace(/\D/g, '');
+          console.log("==> PASO 1: Entrando al flujo 'awaiting_phone_to_check'.");
+          const phoneToCheck = input.replace(/\D/g, '');
 
-          if (!/^\d{10}$/.test(digits)) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '📱 Enviá el *celular* en formato 10 dígitos (sin 0/15).' },
-            });
-            break;
-          }
+          console.log(`==> PASO 2: Buscando el teléfono: ${phoneToCheck} en Podio...`);
+          const existingLeads = await searchLeadByPhone(phoneToCheck);
+          console.log(
+            `==> PASO 3: Búsqueda en Podio finalizada. Se encontraron ${existingLeads.length} leads.`,
+          );
 
-          // Buscar en Contacts
-          const contacts = await searchContactByPhone(digits);
-          const contactItem = contacts?.[0] || null;
+          if (existingLeads.length > 0) {
+            // --- SI ENCUENTRA EL LEAD ---
+            console.log('==> PASO 4: Lead encontrado. Enviando resumen.');
+            const lead = existingLeads[0];
+            const leadTitleField = lead.fields.find(f => f.external_id === 'contacto-2');
+            const leadTitle = leadTitleField ? leadTitleField.values[0].value.title : 'Sin nombre';
+            const assignedField = lead.fields.find(f => f.external_id === 'vendedor-asignado-2');
+            const assignedTo = assignedField ? assignedField.values[0].value.text : 'No asignado';
+            const creationDate = formatPodioDate(lead.created_on);
+            const lastActivityDays = calculateDaysSince(lead.last_event_on);
+            const responseText =
+              `✅ *Lead Encontrado*\n\n` +
+              `*Contacto:* ${leadTitle}\n*Asesor:* ${assignedTo}\n*Fecha de Carga:* ${creationDate}\n*Última Actividad:* ${lastActivityDays}`;
 
-          // Buscar en Leads
-          const leads = await searchLeadByPhone(digits);
-          const leadItem = leads?.[0] || null;
-
-          // Mensaje lindo
-          const msg = buildContactCheckText({ digits, contactItem, leadItem });
-          await sendMessage(from, { type: 'text', text: { body: msg } });
-
-          // CTA:
-          if (!contactItem && !leadItem) {
-            // Solo si NO existe en Contactos → ofrecer CREAR CONTACTO
+            await sendMessage(from, { type: 'text', text: { body: responseText } });
+            delete userStates[numeroRemitente];
+          } else {
+            // --- NO ENCUENTRA EL LEAD ---
+            console.log('==> PASO 4: Lead no encontrado. Ofreciendo crear contacto.');
             currentState.step = 'awaiting_creation_confirmation';
             currentState.data = {
-              phone: [{ type: 'mobile', value: digits }],
-              'telefono-busqueda': digits,
+              phone: [{ type: 'mobile', value: phoneToCheck }],
+              'telefono-busqueda': phoneToCheck,
             };
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: { text: '¿Querés crear el *Contacto* ahora?' },
+                body: {
+                  text: `⚠️ El número *${phoneToCheck}* no existe en Leads.\n\n¿Deseas crear un nuevo Contacto?`,
+                },
                 action: {
                   buttons: [
                     {
                       type: 'reply',
-                      reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                      reply: { id: 'confirm_create_yes', title: 'Sí, crear ahora' },
                     },
-                    { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                    { type: 'reply', reply: { id: 'confirm_create_no', title: 'No, cancelar' } },
                   ],
                 },
               },
             });
-          } else {
-            // Si ya está en Contactos (y esté o no en Leads) → sólo menú/cancelar
-            await sendNeedAnythingElse(from);
-            delete userStates[numeroRemitente]; // cerramos el mini-flujo
           }
+          console.log("==> PASO 5: Flujo 'awaiting_phone_to_check' completado.");
           break;
         }
 
@@ -2079,8 +1961,8 @@ app.post('/whatsapp', async (req, res) => {
               text: { body: '✍️ Decime *Nombre y Apellido*.' },
             });
           } else if (input === 'confirm_create_no' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
             break; // ← no menú
           } else {
             await sendMessage(from, {
@@ -2354,8 +2236,8 @@ app.post('/whatsapp', async (req, res) => {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
           } else if (input === 'post_cancel' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
           } else {
             // Repetimos opciones si escribe otra cosa
             await sendPostResultsOptions(from);
@@ -2363,36 +2245,60 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry': {
-          if (input === 'price_retry_main') {
-            // Siempre mostramos el menú PRINCIPAL de rangos
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
-          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
-            break; // ← no menú
-          } else {
-            // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                    },
-                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                  ],
+        case 'awaiting_price_retry':
+          {
+            if (input === 'price_retry_main') {
+              // Siempre mostramos el menú PRINCIPAL de rangos
+              currentState.step = 'awaiting_price_range';
+              await sendPriceRangeList(from);
+            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+              delete userStates[numeroRemitente];
+              await sendFarewell(from);
+              break; // ← no menú
+            } else {
+              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
                 },
-              },
-            });
+              });
+            }
+            break;
           }
+
+          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
+          currentState.step = 'awaiting_creation_confirmation';
+          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
+          await sendMessage(from, {
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: {
+                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
+              },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
           break;
-        }
 
         case 'awaiting_create_lead_confirm': {
           if (input === 'create_lead_yes') {
@@ -2401,8 +2307,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.leadDraft = {};
             await sendInquietudList(from);
           } else if (input === 'create_lead_no' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
           } else {
             // re-mostrar botones
             const name = currentState.contactItemId ? 'Contacto' : '';
@@ -2721,226 +2627,6 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        // === 4.1 Inicia control de contacto ===
-        case 'contact_check_start': {
-          const phone = (input || '').replace(/\D/g, '');
-          if (!/^\d{10}$/.test(phone)) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '😅 Necesito 10 dígitos, sin 0/15.' },
-            });
-            break;
-          }
-
-          // Buscamos en Contactos y en Leads
-          const contacts = await searchContactByPhone(phone);
-          const leads = await searchLeadByPhone(phone);
-
-          const contactItem = contacts?.[0] || null;
-          const leadItem =
-            (leads || []).sort((a, b) => new Date(b.created_on) - new Date(a.created_on))[0] ||
-            null;
-
-          if (contactItem && !leadItem) {
-            const nombre = getContactTitle(contactItem);
-            const asesorC = getCategoryText(contactItem, 'vendedor-asignado-2') || '—';
-            const fechaC = formatPodioDate(contactItem.created_on);
-
-            const txt =
-              `✅ El número pertenece a *${nombre}*.\n` +
-              `• Cargado por: *${asesorC}*\n` +
-              `• Fecha: *${fechaC}*\n` +
-              `• Estado: *está en Contactos* pero *no está en Leads*.\n\n` +
-              `¿Querés *crear un Lead* con este contacto?`;
-
-            userStates[numeroRemitente].step = 'contact_check_offer_create_lead';
-            userStates[numeroRemitente].contactItemId = contactItem.item_id;
-            userStates[numeroRemitente].phoneDigits = phone;
-
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: txt },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cc_create_lead_yes', title: '✅ Crear Lead' } },
-                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
-                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-            break;
-          }
-
-          if (contactItem && leadItem) {
-            const nombre = getContactTitle(contactItem);
-            const asesorC = getCategoryText(contactItem, 'vendedor-asignado-2') || '—';
-            const fechaC = formatPodioDate(contactItem.created_on);
-
-            const asesorL = getCategoryText(leadItem, 'vendedor-asignado-2') || '—';
-            const fechaL = formatPodioDate(leadItem.created_on);
-
-            const txt =
-              `✅ *${nombre}*\n\n` +
-              `• En *Contactos*: asesor *${asesorC}*, cargado *${fechaC}*.\n` +
-              `• En *Leads*: asesor *${asesorL}*, cargado *${fechaL}*.\n\n` +
-              `¿Te puedo ayudar con algo más?`;
-
-            // Usamos tu flujo estándar de “después” (Menú / Cancelar)
-            userStates[numeroRemitente].step = 'after_update_options';
-            await sendMessage(from, { type: 'text', text: { body: txt } });
-            await sendAfterUpdateOptions(from);
-            break;
-          }
-
-          // No está en ninguno → ofrecer crear Contacto
-          const txt =
-            `⚠️ No encontré ese número en *Contactos* ni en *Leads*.\n` +
-            `¿Querés *crear el Contacto* ahora?`;
-
-          userStates[numeroRemitente].step = 'contact_check_offer_create_contact';
-          userStates[numeroRemitente].phoneDigits = phone;
-
-          await sendMessage(from, {
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: txt },
-              action: {
-                buttons: [
-                  {
-                    type: 'reply',
-                    reply: { id: 'cc_create_contact_yes', title: '✅ Crear Contacto' },
-                  },
-                  { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
-                  { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
-                ],
-              },
-            },
-          });
-          break;
-        }
-
-        // === 4.2 Ofrecer crear LEAD desde un contacto existente ===
-        case 'contact_check_offer_create_lead': {
-          if (input === 'cc_cancel' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
-            break;
-          }
-          if (input === 'cc_back_menu') {
-            delete userStates[numeroRemitente];
-            await sendMainMenu(from);
-            break;
-          }
-          if (input !== 'cc_create_lead_yes') {
-            // Repetir botones si manda otra cosa
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Creamos el Lead con ese contacto?' },
-                action: {
-                  buttons: [
-                    { type: 'reply', reply: { id: 'cc_create_lead_yes', title: '✅ Crear Lead' } },
-                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
-                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-            break;
-          }
-
-          // Crear Lead mínimo (fecha se resuelve por fallback)
-          try {
-            const contactoId = userStates[numeroRemitente].contactItemId;
-            const phone = userStates[numeroRemitente].phoneDigits;
-            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-
-            const fields = {
-              'contacto-2': [{ item_id: contactoId }],
-              'telefono-busqueda': phone,
-              'vendedor-asignado-2': [vendedorId],
-            };
-
-            const meta = await getLeadsFieldsMeta();
-            const dateFieldMeta = meta.find(f => f.type === 'date');
-            const dateExternalId = dateFieldMeta?.external_id || null;
-
-            const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
-
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: `✅ Lead creado y vinculado (ID ${created.item_id}).` },
-            });
-
-            userStates[numeroRemitente].step = 'after_update_options';
-            await sendAfterUpdateOptions(from);
-          } catch (e) {
-            console.error('[CC create lead] fail:', e?.response?.data || e.message);
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-            });
-            delete userStates[numeroRemitente];
-          }
-          break;
-        }
-
-        // === 4.3 Ofrecer crear CONTACTO cuando no existe ===
-        case 'contact_check_offer_create_contact': {
-          if (input === 'cc_cancel' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
-            break;
-          }
-          if (input === 'cc_back_menu') {
-            delete userStates[numeroRemitente];
-            await sendMainMenu(from);
-            break;
-          }
-          if (input !== 'cc_create_contact_yes') {
-            // Re-ofrecer
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Querés crear el Contacto?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'cc_create_contact_yes', title: '✅ Crear Contacto' },
-                    },
-                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
-                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-            break;
-          }
-
-          // Bootstrap al flujo de creación de Contacto que ya tenés:
-          const phone = userStates[numeroRemitente].phoneDigits;
-          userStates[numeroRemitente] = {
-            step: 'awaiting_name_only',
-            data: {
-              title: undefined,
-              phone: [{ type: 'mobile', value: phone }],
-              'telefono-busqueda': phone,
-            },
-          };
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: '✍️ Decime *Nombre y Apellido* para crear el contacto.' },
-          });
-          break;
-        }
-
         case 'awaiting_newconv_text': {
           const leadId = currentState.leadItemId;
           const raw = (input || '').trim();
@@ -3023,8 +2709,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'create_lead_inquietud';
             await sendInquietudList(from);
           } else if (input === 'create_lead_no' || low === 'cancelar') {
-   delete userStates[numeroRemitente];
-   await sendMainMenu(from);
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
           } else {
             await sendMessage(from, {
               type: 'text',
@@ -3054,14 +2740,14 @@ app.post('/whatsapp', async (req, res) => {
           }
           currentState.newLead['presupuesto-2'] = [id];
           currentState.step = 'create_lead_busca';
-          await sendQueBuscaList(from);
+          await sendBuscaList(from);
           break;
         }
 
         case 'create_lead_busca': {
           const id = BUSCA_MAP[input];
           if (!id) {
-            await sendQueBuscaList(from);
+            await sendBuscaList(from);
             break;
           }
           currentState.newLead['busca'] = [id];
@@ -3131,49 +2817,43 @@ app.post('/whatsapp', async (req, res) => {
       } // end switch con estado
     } else {
       // Sin estado: menú inicial
-      if (input === 'menu_contact_check') {
-        // 📇 Controlar contacto
-        userStates[numeroRemitente] = { step: 'contact_check_start' };
-        await sendMessage(from, {
-          type: 'text',
-          text: { body: '📇 Controlar contacto\nEnviá el *celular* (10 dígitos, sin 0/15).' },
-        });
-      } else if (input === 'menu_verificar') {
-        // (flujo original de verificar lead)
+      if (input === 'menu_verificar') {
         userStates[numeroRemitente] = { step: 'awaiting_phone_to_check' };
-        await sendMessage(from, {
-          type: 'text',
-          text: { body: '✅ ¡Entendido! Enviame el número de celular que querés consultar 📱' },
-        });
+        const responseText = '✅ ¡Entendido! Enviame el número de celular que querés consultar 📱';
+        await sendMessage(from, { type: 'text', text: { body: responseText } });
       } else if (input === 'menu_buscar') {
-        // Buscar propiedad (sin cambios)
         userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
         await sendPropertyTypeList(from);
       } else if (input === 'menu_actualizar') {
-        // Actualizar leads (sin cambios)
         userStates[numeroRemitente] = { step: 'update_lead_start' };
         await sendMessage(from, {
           type: 'text',
           text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos, sin 0/15) 📱' },
         });
       } else {
-        // Mostrar menú principal por defecto
-        await sendMainMenu(from);
+        await sendMainMenu(from); // <-- Botonera principal
       }
     }
   } catch (err) {
     console.error('\n--- ERROR DETALLADO EN WEBHOOK ---');
-    if (err?.response) {
+    if (err.response) {
       console.error('Status Code:', err.response.status);
-      console.error('Respuesta de API:', JSON.stringify(err.response.data, null, 2));
+      console.error('Respuesta de Podio:', JSON.stringify(err.response.data, null, 2));
     } else {
-      console.error('Error no relacionado con la API:', err?.message);
-      console.error(err?.stack);
+      console.error('Error no relacionado con la API:', err.message);
+      console.error(err.stack);
     }
-    // (Opcional) avisar al usuario de error aquí si querés
+    // Opcional: Notificar al usuario del error
+    // const from = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
+    // if (from) {
+    //     await sendMessage(from, { type: 'text', text: { body: "❌ Ocurrió un error inesperado. La operación ha sido cancelada. Por favor, informa al administrador." } });
+    // }
   }
 
-  // No enviamos TwiML (usamos WhatsApp Cloud API)
+  // CAMBIO 4: El final del método ya no envía respuesta TwiML.
+  // twiml.message(respuesta);
+  // res.writeHead(200, { "Content-Type": "text/xml" });
+  // res.end(twiml.toString());
 });
 
 // ----------------------------------------
