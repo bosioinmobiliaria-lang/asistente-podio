@@ -776,7 +776,7 @@ async function sendMessage(to, messageData) {
 // === MENÚ PRINCIPAL (con header y footer) ===
 async function sendMainMenu(to) {
   const key = 'whatsapp:+' + to;
-  const name = ASESOR_NOMBRE_MAP[key];
+  const name = ASESOR_NOMBRE_MAP[key] || USER_NAME_MAP[key];
   const saludo = name ? `¡Hola, *${name}*! 👋` : '¡Hola! 👋';
 
   await sendMessage(to, {
@@ -1246,12 +1246,12 @@ async function updateLeadDate(itemId, inputStr) {
 
 // Mensaje de despedida estándar
 async function sendFarewell(to) {
-  await sendMessage(to, {
-    type: 'text',
-    text: {
-      body: '✨ Fue un gusto ayudarte. Estoy para acompañarte; cuando quieras, escribime. 🙌',
-    },
-  });
+  const key = 'whatsapp:+' + to;
+  const name = ASESOR_NOMBRE_MAP[key] || USER_NAME_MAP[key];
+  const msg = name
+    ? `✨ Fue un gusto ayudarte, *${name}*. Cuando quieras, escribime. 🙌`
+    : '✨ Fue un gusto ayudarte. Cuando quieras, escribime. 🙌';
+  await sendMessage(to, { type: 'text', text: { body: msg } });
 }
 
 async function createItemIn(appName, fields) {
@@ -1722,6 +1722,9 @@ const ASESOR_NOMBRE_MAP = {
   'whatsapp:+5493512846059': 'Debo',
 };
 
+// Nombres aprendidos de usuarios internos no listados (memoria en RAM)
+const USER_NAME_MAP = {};
+
 // --- Rangos altos (si eligen > 200k) ---
 const PRICE_RANGES_HIGH = {
   h1: { from: 200000, to: 300000 },
@@ -1818,6 +1821,29 @@ app.post('/whatsapp', async (req, res) => {
     }
 
     const input = interactiveReplyId || userInput;
+
+    // 🔗 Override global del menú: funciona aunque haya estado previo
+    if (['menu_check_contact', 'menu_actualizar', 'menu_buscar'].includes(input)) {
+      delete userStates[numeroRemitente];
+
+      if (input === 'menu_check_contact') {
+        userStates[numeroRemitente] = { step: 'check_contact_start' };
+        await sendMessage(from, {
+          type: 'text',
+          text: { body: '📱 Pasame el *celular* (10 dígitos, sin 0/15).' },
+        });
+      } else if (input === 'menu_actualizar') {
+        userStates[numeroRemitente] = { step: 'update_lead_start' };
+        await sendMessage(from, {
+          type: 'text',
+          text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos) o el *ID* del lead.' },
+        });
+      } else if (input === 'menu_buscar') {
+        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
+        await sendPropertyTypeList(from);
+      }
+      return; // 👈 importantísimo: cortamos el flujo acá
+    }
 
     // CAMBIO 3: La variable "respuesta" se elimina. Cada respuesta se envía directamente.
     // const twiml = new MessagingResponse();
@@ -2817,6 +2843,24 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
+        case 'collect_display_name': {
+          const name = (input || '').trim();
+          if (!name || name.length < 2) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: 'Perdón, no lo tomé. Decime solo tu *nombre* (2+ letras).' },
+            });
+            break;
+          }
+          const key = 'whatsapp:+' + from;
+          USER_NAME_MAP[key] = name;
+
+          await sendMessage(from, { type: 'text', text: { body: `¡Gracias, *${name}*! 🙌` } });
+          delete userStates[numeroRemitente]; // arrancamos limpio
+          await sendMainMenu(from);
+          break;
+        }
+
         case 'check_contact_choices': {
           if (input === 'check_create_contact_yes') {
             // saltamos directo a pedir nombre (reutilizando tu flujo de creación)
@@ -2982,12 +3026,29 @@ app.post('/whatsapp', async (req, res) => {
           type: 'text',
           text: { body: '📱 Pasame el *celular* (10 dígitos, sin 0/15).' },
         });
-      } else if (input === 'menu_buscar') {
-        // (igual)
       } else if (input === 'menu_actualizar') {
-        // (igual)
+        userStates[numeroRemitente] = { step: 'update_lead_start' };
+        await sendMessage(from, {
+          type: 'text',
+          text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos) o el *ID* del lead.' },
+        });
+      } else if (input === 'menu_buscar') {
+        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
+        await sendPropertyTypeList(from);
       } else {
-        await sendMainMenu(from);
+        // Si es un número nuevo, nos presentamos y pedimos nombre; si no, mostramos menú
+        const key = 'whatsapp:+' + from;
+        if (!ASESOR_NOMBRE_MAP[key] && !USER_NAME_MAP[key]) {
+          userStates[numeroRemitente] = { step: 'collect_display_name' };
+          await sendMessage(from, {
+            type: 'text',
+            text: {
+              body: 'Hola, soy *Bosi*, asistente de Bosio Inmobiliaria. ¿Cómo te llamás? 🙂',
+            },
+          });
+        } else {
+          await sendMainMenu(from);
+        }
       }
     }
   } catch (err) {
@@ -2999,17 +3060,7 @@ app.post('/whatsapp', async (req, res) => {
       console.error('Error no relacionado con la API:', err.message);
       console.error(err.stack);
     }
-    // Opcional: Notificar al usuario del error
-    // const from = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
-    // if (from) {
-    //     await sendMessage(from, { type: 'text', text: { body: "❌ Ocurrió un error inesperado. La operación ha sido cancelada. Por favor, informa al administrador." } });
-    // }
   }
-
-  // CAMBIO 4: El final del método ya no envía respuesta TwiML.
-  // twiml.message(respuesta);
-  // res.writeHead(200, { "Content-Type": "text/xml" });
-  // res.end(twiml.toString());
 });
 
 // ----------------------------------------
