@@ -9,6 +9,54 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- Sanitizado para WhatsApp Cloud API (sin Markdown en headers/footers/títulos) ---
+const MAX_HEADER_LEN = 60;
+const MAX_FOOTER_LEN = 60;
+const MAX_BUTTON_TITLE = 20;
+const MAX_LIST_TITLE = 24;
+const MAX_LIST_BUTTON = 20;
+
+function stripMarkdownLite(s) {
+  return (s || '')
+    .replace(/[*_~`>|]/g, '') // quita MD básico
+    .replace(/\n/g, ' ')       // header/footer no aceptan saltos de línea
+    .trim();
+}
+
+function sanitizeInteractive(i) {
+  if (!i) return i;
+
+  if (i.header?.type === 'text' && typeof i.header.text === 'string') {
+    i.header.text = stripMarkdownLite(i.header.text).slice(0, MAX_HEADER_LEN);
+  }
+  if (i.footer?.text) {
+    i.footer.text = stripMarkdownLite(i.footer.text).slice(0, MAX_FOOTER_LEN);
+  }
+
+  // Botonera
+  if (Array.isArray(i.action?.buttons)) {
+    i.action.buttons.forEach(b => {
+      if (b?.reply?.title) b.reply.title = stripMarkdownLite(b.reply.title).slice(0, MAX_BUTTON_TITLE);
+    });
+  }
+
+  // Listas
+  if (i.type === 'list' && i.action) {
+    if (i.action.button) i.action.button = stripMarkdownLite(i.action.button).slice(0, MAX_LIST_BUTTON);
+    if (Array.isArray(i.action.sections)) {
+      i.action.sections.forEach(sec => {
+        if (sec.title) sec.title = stripMarkdownLite(sec.title).slice(0, MAX_LIST_TITLE);
+        if (Array.isArray(sec.rows)) {
+          sec.rows.forEach(r => {
+            if (r.title) r.title = stripMarkdownLite(r.title).slice(0, MAX_LIST_TITLE);
+          });
+        }
+      });
+    }
+  }
+  return i;
+}
+
 // ----------------------------------------
 // Helpers
 // ----------------------------------------
@@ -830,16 +878,16 @@ async function sendMessage(to, messageData) {
   const API_VERSION = 'v19.0';
   const url = `https://graph.facebook.com/${API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`;
 
-  // CAMBIO: Se construye el payload de una forma más tradicional para mayor compatibilidad.
-  const basePayload = {
-    messaging_product: 'whatsapp',
-    to: to,
-  };
+  const basePayload = { messaging_product: 'whatsapp', to };
   const payload = Object.assign(basePayload, messageData);
+
+  // ⛑️ Sanitiza cualquier interactivo (remueve Markdown de header/footer/títulos)
+  if (payload.type === 'interactive' && payload.interactive) {
+    payload.interactive = sanitizeInteractive(payload.interactive);
+  }
 
   console.log('Enviando mensaje a Meta:', JSON.stringify(payload, null, 2));
 
-  // El resto de la función es idéntica
   try {
     await axios.post(url, payload, {
       headers: {
@@ -862,11 +910,9 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🤖 ¡Hola! Soy *Bosi*' },
-      body: {
-        text: 'Estoy para ayudarte ✨\n' + 'Elegí una opción para continuar:',
-      },
-      footer: { text: 'Tip: escribí *cancelar* para salir' },
+      header: { type: 'text', text: '🤖 ¡Hola! Soy Bosi' }, // sin asteriscos
+      body: { text: 'Estoy para ayudarte ✨\nElegí una opción para continuar:' },
+      footer: { text: 'Tip: escribí cancelar para salir' }, // sin asteriscos
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'menu_controlar', title: '🧾 Controlar contacto' } },
@@ -1714,8 +1760,6 @@ app.get('/', (_req, res) =>
 // ----------------------------------------
 // Webhook para WhatsApp (LÓGICA CONVERSACIONAL Y RÁPIDA v11.0)
 // ----------------------------------------
-const twilio = require('twilio');
-const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const userStates = {}; // "Memoria" del bot
 
@@ -1971,6 +2015,7 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         // ===== 1) Verificar teléfono en Leads =====
+
         case 'awaiting_phone_to_check': {
           const digits = (input || '').replace(/\D/g, '');
 
@@ -2318,60 +2363,36 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry':
-          {
-            if (input === 'price_retry_main') {
-              // Siempre mostramos el menú PRINCIPAL de rangos
-              currentState.step = 'awaiting_price_range';
-              await sendPriceRangeList(from);
-            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-              delete userStates[numeroRemitente];
-              await sendFarewell(from);
-              break; // ← no menú
-            } else {
-              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
-              await sendMessage(from, {
-                type: 'interactive',
-                interactive: {
-                  type: 'button',
-                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                  action: {
-                    buttons: [
-                      {
-                        type: 'reply',
-                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                      },
-                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                    ],
-                  },
+        case 'awaiting_price_retry': {
+          if (input === 'price_retry_main') {
+            // Siempre mostramos el menú PRINCIPAL de rangos
+            currentState.step = 'awaiting_price_range';
+            await sendPriceRangeList(from);
+          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+            break; // ← no menú
+          } else {
+            // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                action: {
+                  buttons: [
+                    {
+                      type: 'reply',
+                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                    },
+                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                  ],
                 },
-              });
-            }
-            break;
+              },
+            });
           }
-
-          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
-          currentState.step = 'awaiting_creation_confirmation';
-          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
-          await sendMessage(from, {
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: {
-                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
-              },
-              action: {
-                buttons: [
-                  {
-                    type: 'reply',
-                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
-                  },
-                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
-                ],
-              },
-            },
-          });
           break;
+        }
 
         case 'awaiting_create_lead_confirm': {
           if (input === 'create_lead_yes') {
@@ -3033,14 +3054,14 @@ app.post('/whatsapp', async (req, res) => {
           }
           currentState.newLead['presupuesto-2'] = [id];
           currentState.step = 'create_lead_busca';
-          await sendBuscaList(from);
+          await sendQueBuscaList(from);
           break;
         }
 
         case 'create_lead_busca': {
           const id = BUSCA_MAP[input];
           if (!id) {
-            await sendBuscaList(from);
+            await sendQueBuscaList(from);
             break;
           }
           currentState.newLead['busca'] = [id];
