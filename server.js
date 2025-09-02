@@ -306,7 +306,6 @@ async function createLeadWithDateFallback(fields, dateExternalId, when = new Dat
   const ymd = dt.toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
-  // 👇 OBJETO (Range), no array
   const variants = [
     { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // sin hora
     { [dateExternalId]: { start: stamp, end: stamp } }, // con hora
@@ -1264,25 +1263,20 @@ async function createItemIn(appName, fields) {
     for (const f of (meta || []).filter(x => x.type === 'date' && x.config?.required)) {
       const ext = f.external_id;
       const withTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
 
       let v = payloadFields[ext];
 
-      // Si vino como array, usá el primer elemento (create espera objeto)
+      // si vino como array (por herencia vieja), DES-empacalo
       if (Array.isArray(v)) v = v[0];
 
-      // Si no vino nada y es requerido, poné HOY con el formato correcto
+      // si no vino nada y es requerido, rellená HOY (como OBJETO)
       if (!v) {
-        if (withTime) {
-          v = wantRange
-            ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-            : { start: `${ymd} 00:00:00` };
-        } else {
-          v = wantRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
-        }
+        v = withTime
+          ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+          : { start_date: ymd, end_date: ymd };
       }
 
-      payloadFields[ext] = v; // 👈 OBJETO, no array
+      payloadFields[ext] = v; // ← **objeto**, nunca array
     }
   }
 
