@@ -1266,41 +1266,34 @@ async function createItemIn(appName, fields) {
 
   let payloadFields = cleanDeep(fields);
 
-  if (appName === 'leads') {
-    const leadsMeta = await getLeadsFieldsMeta();
+if (appName === 'leads') {
+  const leadsMeta = await getLeadsFieldsMeta();
 
-    // ❌ ELIMINAMOS ESTA LÍNEA PROBLEMÁTICA
-    // payloadFields = normalizeLeadDateFieldsForCreate(payloadFields, leadsMeta);
+  // Log corto (no sale del scope)
+  const df = (leadsMeta || []).find(f => f.type === 'date');
+  const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
+  const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+  console.log(
+    '[LEADS] Date ext:',
+    df?.external_id,
+    '| wantTime=',
+    wantTime,
+    ' | wantRange=',
+    wantRange,
+  );
 
-    // Dejamos el log de diagnóstico que es útil
-    const df = (leadsMeta || []).find(f => f.type === 'date');
-    console.log(
-      '[LEADS] Date ext:',
-      df?.external_id,
-      '| wantTime=',
-      (df?.config?.settings?.time || 'disabled') !== 'disabled',
-      '| wantRange=',
-      (df?.config?.settings?.end || 'disabled') !== 'disabled',
-    );
-  }
-
-  if (appName === 'leads') {
-    const df = (leadsMeta || []).filter(f => f.type === 'date');
-    console.log(
-      '[LEADS] Date fields meta →',
-      JSON.stringify(
-        df.map(f => ({
-          label: f.label,
-          external_id: f.external_id,
-          required: !!f.config?.required,
-          time: f?.config?.settings?.time || 'disabled',
-          end: f?.config?.settings?.end || 'disabled',
-        })),
-        null,
-        2,
-      ),
-    );
-  }
+  // (opcional) log extendido, pero SIEMPRE usando la misma variable local
+  const dateFieldsInfo = (leadsMeta || [])
+    .filter(f => f.type === 'date')
+    .map(f => ({
+      label: f.label,
+      external_id: f.external_id,
+      required: !!f.config?.required,
+      time: f?.config?.settings?.time || 'disabled',
+      end: f?.config?.settings?.end || 'disabled',
+    }));
+  console.log('[LEADS] Date fields meta →', JSON.stringify(dateFieldsInfo, null, 2));
+}
 
   // El resto de la función sigue igual...
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
