@@ -53,6 +53,15 @@ function addHours(timeStr, hoursToAdd = 1) {
   return `${hh}:${mm}:${ss}`;
 }
 
+function getCategoryText(item, externalId) {
+  const f = (item?.fields || []).find(x => x.external_id === externalId);
+  return f?.values?.[0]?.value?.text || '';
+}
+
+function getContactTitle(item) {
+  return item?.title || 'Sin nombre';
+}
+
 /** Construye objeto de fecha para Podio; soporta fecha simple o rango. */
 function buildPodioDateObject(input, wantRange = false) {
   if (!input) return undefined;
@@ -90,15 +99,15 @@ function buildPodioDateObject(input, wantRange = false) {
 // Devuelve YYYY-MM-DD y HH:MM:SS (si existiera)
 function splitStamp(input) {
   if (!input) return { date: null, time: null };
-  if (input instanceof Date) return { date: input.toISOString().slice(0,10), time: '00:00:00' };
+  if (input instanceof Date) return { date: input.toISOString().slice(0, 10), time: '00:00:00' };
   if (typeof input === 'string') {
-    const s = input.replace('T',' ').trim();
+    const s = input.replace('T', ' ').trim();
     const [d, t] = s.split(/\s+/);
-    return { date: d || null, time: (t || '00:00:00') };
+    return { date: d || null, time: t || '00:00:00' };
   }
   if (typeof input === 'object') {
     if (input.start) {
-      const [d, t='00:00:00'] = input.start.split(' ');
+      const [d, t = '00:00:00'] = input.start.split(' ');
       return { date: d, time: t };
     }
     if (input.start_date) return { date: input.start_date, time: null };
@@ -779,24 +788,14 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: {
-        // ← nuevo header
-        type: 'text',
-        text: '🤖 Bosi — tu asistente personal',
-      },
-      body: {
-        // ← copy más cálido
-        text: 'Hola, soy *Bosi* 👋 ¿qué te gustaría hacer?',
-      },
-      footer: {
-        // ← pista mínima
-        text: 'Tip: escribí *cancelar* para volver al menú',
-      },
+      header: { type: 'text', text: '🤖 Bosi — tu asistente' },
+      body: { text: 'Elegí una opción:' },
+      footer: { text: 'Tip: escribí *cancelar* para salir' },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'menu_verificar', title: '✅ Verificar Lead' } },
-          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar Propiedad' } },
-          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar Lead' } },
+          { type: 'reply', reply: { id: 'menu_contact_check', title: '📇 Controlar contacto' } },
+          { type: 'reply', reply: { id: 'menu_actualizar', title: '🛠️ Actualizar Leads' } },
+          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } },
         ],
       },
     },
@@ -2627,6 +2626,226 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
+        // === 4.1 Inicia control de contacto ===
+        case 'contact_check_start': {
+          const phone = (input || '').replace(/\D/g, '');
+          if (!/^\d{10}$/.test(phone)) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '😅 Necesito 10 dígitos, sin 0/15.' },
+            });
+            break;
+          }
+
+          // Buscamos en Contactos y en Leads
+          const contacts = await searchContactByPhone(phone);
+          const leads = await searchLeadByPhone(phone);
+
+          const contactItem = contacts?.[0] || null;
+          const leadItem =
+            (leads || []).sort((a, b) => new Date(b.created_on) - new Date(a.created_on))[0] ||
+            null;
+
+          if (contactItem && !leadItem) {
+            const nombre = getContactTitle(contactItem);
+            const asesorC = getCategoryText(contactItem, 'vendedor-asignado-2') || '—';
+            const fechaC = formatPodioDate(contactItem.created_on);
+
+            const txt =
+              `✅ El número pertenece a *${nombre}*.\n` +
+              `• Cargado por: *${asesorC}*\n` +
+              `• Fecha: *${fechaC}*\n` +
+              `• Estado: *está en Contactos* pero *no está en Leads*.\n\n` +
+              `¿Querés *crear un Lead* con este contacto?`;
+
+            userStates[numeroRemitente].step = 'contact_check_offer_create_lead';
+            userStates[numeroRemitente].contactItemId = contactItem.item_id;
+            userStates[numeroRemitente].phoneDigits = phone;
+
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: txt },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cc_create_lead_yes', title: '✅ Crear Lead' } },
+                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          if (contactItem && leadItem) {
+            const nombre = getContactTitle(contactItem);
+            const asesorC = getCategoryText(contactItem, 'vendedor-asignado-2') || '—';
+            const fechaC = formatPodioDate(contactItem.created_on);
+
+            const asesorL = getCategoryText(leadItem, 'vendedor-asignado-2') || '—';
+            const fechaL = formatPodioDate(leadItem.created_on);
+
+            const txt =
+              `✅ *${nombre}*\n\n` +
+              `• En *Contactos*: asesor *${asesorC}*, cargado *${fechaC}*.\n` +
+              `• En *Leads*: asesor *${asesorL}*, cargado *${fechaL}*.\n\n` +
+              `¿Te puedo ayudar con algo más?`;
+
+            // Usamos tu flujo estándar de “después” (Menú / Cancelar)
+            userStates[numeroRemitente].step = 'after_update_options';
+            await sendMessage(from, { type: 'text', text: { body: txt } });
+            await sendAfterUpdateOptions(from);
+            break;
+          }
+
+          // No está en ninguno → ofrecer crear Contacto
+          const txt =
+            `⚠️ No encontré ese número en *Contactos* ni en *Leads*.\n` +
+            `¿Querés *crear el Contacto* ahora?`;
+
+          userStates[numeroRemitente].step = 'contact_check_offer_create_contact';
+          userStates[numeroRemitente].phoneDigits = phone;
+
+          await sendMessage(from, {
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: txt },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'cc_create_contact_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
+                  { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
+          break;
+        }
+
+        // === 4.2 Ofrecer crear LEAD desde un contacto existente ===
+        case 'contact_check_offer_create_lead': {
+          if (input === 'cc_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+            break;
+          }
+          if (input === 'cc_back_menu') {
+            delete userStates[numeroRemitente];
+            await sendMainMenu(from);
+            break;
+          }
+          if (input !== 'cc_create_lead_yes') {
+            // Repetir botones si manda otra cosa
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Creamos el Lead con ese contacto?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'cc_create_lead_yes', title: '✅ Crear Lead' } },
+                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          // Crear Lead mínimo (fecha se resuelve por fallback)
+          try {
+            const contactoId = userStates[numeroRemitente].contactItemId;
+            const phone = userStates[numeroRemitente].phoneDigits;
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+
+            const fields = {
+              'contacto-2': [{ item_id: contactoId }],
+              'telefono-busqueda': phone,
+              'vendedor-asignado-2': [vendedorId],
+            };
+
+            const meta = await getLeadsFieldsMeta();
+            const dateFieldMeta = meta.find(f => f.type === 'date');
+            const dateExternalId = dateFieldMeta?.external_id || null;
+
+            const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
+
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: `✅ Lead creado y vinculado (ID ${created.item_id}).` },
+            });
+
+            userStates[numeroRemitente].step = 'after_update_options';
+            await sendAfterUpdateOptions(from);
+          } catch (e) {
+            console.error('[CC create lead] fail:', e?.response?.data || e.message);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
+
+        // === 4.3 Ofrecer crear CONTACTO cuando no existe ===
+        case 'contact_check_offer_create_contact': {
+          if (input === 'cc_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+            break;
+          }
+          if (input === 'cc_back_menu') {
+            delete userStates[numeroRemitente];
+            await sendMainMenu(from);
+            break;
+          }
+          if (input !== 'cc_create_contact_yes') {
+            // Re-ofrecer
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Querés crear el Contacto?' },
+                action: {
+                  buttons: [
+                    {
+                      type: 'reply',
+                      reply: { id: 'cc_create_contact_yes', title: '✅ Crear Contacto' },
+                    },
+                    { type: 'reply', reply: { id: 'cc_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'cc_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          // Bootstrap al flujo de creación de Contacto que ya tenés:
+          const phone = userStates[numeroRemitente].phoneDigits;
+          userStates[numeroRemitente] = {
+            step: 'awaiting_name_only',
+            data: {
+              title: undefined,
+              phone: [{ type: 'mobile', value: phone }],
+              'telefono-busqueda': phone,
+            },
+          };
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: '✍️ Decime *Nombre y Apellido* para crear el contacto.' },
+          });
+          break;
+        }
+
         case 'awaiting_newconv_text': {
           const leadId = currentState.leadItemId;
           const raw = (input || '').trim();
@@ -2817,43 +3036,49 @@ app.post('/whatsapp', async (req, res) => {
       } // end switch con estado
     } else {
       // Sin estado: menú inicial
-      if (input === 'menu_verificar') {
+      if (input === 'menu_contact_check') {
+        // 📇 Controlar contacto
+        userStates[numeroRemitente] = { step: 'contact_check_start' };
+        await sendMessage(from, {
+          type: 'text',
+          text: { body: '📇 Controlar contacto\nEnviá el *celular* (10 dígitos, sin 0/15).' },
+        });
+      } else if (input === 'menu_verificar') {
+        // (flujo original de verificar lead)
         userStates[numeroRemitente] = { step: 'awaiting_phone_to_check' };
-        const responseText = '✅ ¡Entendido! Enviame el número de celular que querés consultar 📱';
-        await sendMessage(from, { type: 'text', text: { body: responseText } });
+        await sendMessage(from, {
+          type: 'text',
+          text: { body: '✅ ¡Entendido! Enviame el número de celular que querés consultar 📱' },
+        });
       } else if (input === 'menu_buscar') {
+        // Buscar propiedad (sin cambios)
         userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
         await sendPropertyTypeList(from);
       } else if (input === 'menu_actualizar') {
+        // Actualizar leads (sin cambios)
         userStates[numeroRemitente] = { step: 'update_lead_start' };
         await sendMessage(from, {
           type: 'text',
           text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos, sin 0/15) 📱' },
         });
       } else {
-        await sendMainMenu(from); // <-- Botonera principal
+        // Mostrar menú principal por defecto
+        await sendMainMenu(from);
       }
     }
   } catch (err) {
     console.error('\n--- ERROR DETALLADO EN WEBHOOK ---');
-    if (err.response) {
+    if (err?.response) {
       console.error('Status Code:', err.response.status);
-      console.error('Respuesta de Podio:', JSON.stringify(err.response.data, null, 2));
+      console.error('Respuesta de API:', JSON.stringify(err.response.data, null, 2));
     } else {
-      console.error('Error no relacionado con la API:', err.message);
-      console.error(err.stack);
+      console.error('Error no relacionado con la API:', err?.message);
+      console.error(err?.stack);
     }
-    // Opcional: Notificar al usuario del error
-    // const from = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
-    // if (from) {
-    //     await sendMessage(from, { type: 'text', text: { body: "❌ Ocurrió un error inesperado. La operación ha sido cancelada. Por favor, informa al administrador." } });
-    // }
+    // (Opcional) avisar al usuario de error aquí si querés
   }
 
-  // CAMBIO 4: El final del método ya no envía respuesta TwiML.
-  // twiml.message(respuesta);
-  // res.writeHead(200, { "Content-Type": "text/xml" });
-  // res.end(twiml.toString());
+  // No enviamos TwiML (usamos WhatsApp Cloud API)
 });
 
 // ----------------------------------------
