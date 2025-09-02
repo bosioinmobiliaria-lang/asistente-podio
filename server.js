@@ -298,27 +298,26 @@ function ddmmyyyyFromStamp(stamp) {
   return `${D}/${M}/${Y}`;
 }
 async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
-  // Si pediste saltar fecha por env, creamos sin fecha
   if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
     return createItemIn('leads', fields);
   }
 
-  const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
-  const ymd = dt.toISOString().slice(0, 10);
+  const ymd = (when instanceof Date ? when : new Date(when)).toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
-  // 👇 SIEMPRE OBJETO (no array)
   const variants = [
-    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // sin hora, rango
-    { [dateExternalId]: { start: stamp, end: stamp } }, // con hora, rango
-    { [dateExternalId]: { start_date: ymd } }, // sin hora, solo start
-    { [dateExternalId]: { start: stamp } }, // con hora, solo start
+    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] },
+    { [dateExternalId]: [{ start: stamp, end: stamp }] },
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
-      const payload = { ...fields, ...v }; // v pisa lo anterior
+      const payload = { ...fields, ...v };
+      // 🔒 garantía: siempre array
+      if (!Array.isArray(payload[dateExternalId])) {
+        payload[dateExternalId] = [payload[dateExternalId]];
+      }
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -1258,22 +1257,24 @@ async function createItemIn(appName, fields) {
   const appId =
     appName === 'leads' ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
   const token = await getAppAccessTokenFor(appName);
-
   let payloadFields = cleanDeep(fields);
 
   if (appName === 'leads') {
     const meta = await getLeadsFieldsMeta();
-    const df = (meta || []).find(f => f.type === 'date');
-    const ext = process.env.PODIO_LEADS_DATE_EXTERNAL_ID || df?.external_id;
+    const ymd = new Date().toISOString().slice(0, 10);
 
-    console.log('[LEADS] Date ext:', ext);
-    console.log(
-      '[LEADS] Payload (antes de POST) fecha →',
-      JSON.stringify(payloadFields?.[ext], null, 2),
-    );
-
-    if (!ext || payloadFields?.[ext] == null) {
-      throw new Error(`[LEADS] Falta el campo de fecha "${ext}" en el payload antes del POST`);
+    for (const f of (meta || []).filter(x => x.type === 'date' && x.config?.required)) {
+      const ext = f.external_id;
+      const withTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+      if (!payloadFields[ext]) {
+        payloadFields[ext] = [
+          withTime
+            ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+            : { start_date: ymd, end_date: ymd },
+        ];
+      } else if (!Array.isArray(payloadFields[ext])) {
+        payloadFields[ext] = [payloadFields[ext]];
+      }
     }
   }
 
