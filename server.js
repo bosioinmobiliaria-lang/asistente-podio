@@ -302,22 +302,20 @@ async function createLeadWithDateFallback(fields, dateExternalId, when = new Dat
     return createItemIn('leads', fields);
   }
 
-  const ymd = (when instanceof Date ? when : new Date(when)).toISOString().slice(0, 10);
+  const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
+  const ymd = dt.toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
+  // 👇 OBJETO (Range), no array
   const variants = [
-    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] },
-    { [dateExternalId]: [{ start: stamp, end: stamp }] },
+    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // sin hora
+    { [dateExternalId]: { start: stamp, end: stamp } }, // con hora
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
       const payload = { ...fields, ...v };
-      // 🔒 garantía: siempre array
-      if (!Array.isArray(payload[dateExternalId])) {
-        payload[dateExternalId] = [payload[dateExternalId]];
-      }
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -1266,15 +1264,25 @@ async function createItemIn(appName, fields) {
     for (const f of (meta || []).filter(x => x.type === 'date' && x.config?.required)) {
       const ext = f.external_id;
       const withTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-      if (!payloadFields[ext]) {
-        payloadFields[ext] = [
-          withTime
+      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+
+      let v = payloadFields[ext];
+
+      // Si vino como array, usá el primer elemento (create espera objeto)
+      if (Array.isArray(v)) v = v[0];
+
+      // Si no vino nada y es requerido, poné HOY con el formato correcto
+      if (!v) {
+        if (withTime) {
+          v = wantRange
             ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-            : { start_date: ymd, end_date: ymd },
-        ];
-      } else if (!Array.isArray(payloadFields[ext])) {
-        payloadFields[ext] = [payloadFields[ext]];
+            : { start: `${ymd} 00:00:00` };
+        } else {
+          v = wantRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
+        }
       }
+
+      payloadFields[ext] = v; // 👈 OBJETO, no array
     }
   }
 
@@ -2369,11 +2377,23 @@ app.post('/whatsapp', async (req, res) => {
 
             const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
 
+            // donde armás el payload para crear
             if (fields[dateExternalId]) {
+              const v = fields[dateExternalId];
               console.log(
-                '[DEBUG] shape fecha:',
-                Array.isArray(fields[dateExternalId]) ? 'ARRAY' : typeof fields[dateExternalId],
-                JSON.stringify(fields[dateExternalId]),
+                '[DEBUG] fecha (antes):',
+                Array.isArray(v) ? 'ARRAY' : 'OBJECT',
+                Array.isArray(v) ? Object.keys(v[0] || {}) : Object.keys(v),
+              );
+            }
+
+            // y dentro de createItemIn, ya con payloadFields normalizado:
+            const v2 = payloadFields[dateExternalId];
+            if (v2) {
+              console.log(
+                '[DEBUG] fecha (final):',
+                Array.isArray(v2) ? 'ARRAY' : 'OBJECT',
+                Array.isArray(v2) ? Object.keys(v2[0] || {}) : Object.keys(v2),
               );
             }
 
