@@ -779,24 +779,14 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: {
-        // ← nuevo header
-        type: 'text',
-        text: '🤖 Bosi — tu asistente personal',
-      },
-      body: {
-        // ← copy más cálido
-        text: 'Hola, soy *Bosi* 👋 ¿qué te gustaría hacer?',
-      },
-      footer: {
-        // ← pista mínima
-        text: 'Tip: escribí *cancelar* para volver al menú',
-      },
+      header: { type: 'text', text: '🤖 Bosi — tu asistente personal' },
+      body: { text: 'Elegí una opción 👇' },
+      footer: { text: 'Tip: escribí *cancelar* para salir' },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'menu_verificar', title: '✅ Verificar Lead' } },
-          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar Propiedad' } },
-          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar Lead' } },
+          { type: 'reply', reply: { id: 'menu_check_contact', title: '📇 Chequear contacto' } },
+          { type: 'reply', reply: { id: 'menu_actualizar', title: '✏️ Actualizar leads' } }, // (ya funcionaba)
+          { type: 'reply', reply: { id: 'menu_buscar', title: '🔎 Buscar propiedad' } }, // (ya funcionaba)
         ],
       },
     },
@@ -2695,6 +2685,163 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
+        case 'check_contact_start': {
+          const digits = (input || '').replace(/\D/g, '').slice(-10);
+          if (!/^\d{10}$/.test(digits)) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '⚠️ Enviá 10 dígitos (sin 0/15).' },
+            });
+            break;
+          }
+
+          currentState.tempPhoneDigits = digits;
+
+          // Buscar en Contactos y Leads
+          const [contacts, leads] = await Promise.all([
+            searchContactByPhone(digits),
+            searchLeadByPhone(digits),
+          ]);
+
+          const c = (contacts || [])[0];
+          const l = (leads || [])[0];
+
+          // Helpers para mostrar asesor/fecha
+          const getAsesor = item => {
+            const f = (item?.fields || []).find(x => x.external_id === 'vendedor-asignado-2');
+            return f?.values?.[0]?.value?.text || '—';
+            // Si quisieras el usuario creador real: item.created_by?.name (a veces viene)
+          };
+          const fecha = item => formatPodioDate(item?.created_on);
+
+          if (c && !l) {
+            // a) En contactos, no en leads
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body:
+                  `✅ *Cliente encontrado en Contactos*\n` +
+                  `• Cargado: ${fecha(c)}\n` +
+                  `• Asesor: ${getAsesor(c)}\n\n` +
+                  `🚫 *No aparece en Leads.*`,
+              },
+            });
+
+            currentState.step = 'check_contact_choices';
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Deseás cargarlo como *nuevo contacto*?' },
+                action: {
+                  buttons: [
+                    {
+                      type: 'reply',
+                      reply: { id: 'check_create_contact_yes', title: '🧾 Crear contacto' },
+                    },
+                    { type: 'reply', reply: { id: 'check_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          if (c && l) {
+            // b) En contactos y en leads
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body:
+                  `✅ *Cliente en Contactos*\n` +
+                  `• Cargado: ${fecha(c)}\n` +
+                  `• Asesor: ${getAsesor(c)}\n\n` +
+                  `✅ *También en Leads*\n` +
+                  `• Cargado: ${fecha(l)}\n` +
+                  `• Asesor: ${getAsesor(l)}`,
+              },
+            });
+
+            currentState.step = 'check_contact_choices';
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '¿Te puedo ayudar en algo más?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'check_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'check_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+            break;
+          }
+
+          // c) No está en contactos ni en leads
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: '🔎 *No encontré* ningún contacto ni lead con ese número.' },
+          });
+
+          currentState.step = 'check_contact_choices';
+          await sendMessage(from, {
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: '¿Querés *crear un nuevo contacto*?' },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'check_create_contact_yes', title: '🧾 Crear contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'check_cancel', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
+          break;
+        }
+
+        case 'check_contact_choices': {
+          if (input === 'check_create_contact_yes') {
+            // saltamos directo a pedir nombre (reutilizando tu flujo de creación)
+            userStates[numeroRemitente].step = 'awaiting_name_only';
+            userStates[numeroRemitente].data = {
+              phone: [{ type: 'mobile', value: userStates[numeroRemitente].tempPhoneDigits }],
+              'telefono-busqueda': userStates[numeroRemitente].tempPhoneDigits,
+            };
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✍️ Decime *Nombre y Apellido*.' },
+            });
+          } else if (input === 'check_back_menu') {
+            delete userStates[numeroRemitente];
+            await sendMainMenu(from);
+          } else if (input === 'check_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from); // “Fue un gusto ayudarte…”
+          } else {
+            // Si manda otra cosa, repetimos opciones cortas
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: 'Elegí una opción 👇' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'check_back_menu', title: '🏠 Menú principal' } },
+                    { type: 'reply', reply: { id: 'check_cancel', title: '❌ Cancelar' } },
+                  ],
+                },
+              },
+            });
+          }
+          break;
+        }
+
         case 'create_lead_confirm': {
           if (input === 'create_lead_yes') {
             // Vinculamos (o creamos) el contacto por teléfono
@@ -2817,21 +2964,18 @@ app.post('/whatsapp', async (req, res) => {
       } // end switch con estado
     } else {
       // Sin estado: menú inicial
-      if (input === 'menu_verificar') {
-        userStates[numeroRemitente] = { step: 'awaiting_phone_to_check' };
-        const responseText = '✅ ¡Entendido! Enviame el número de celular que querés consultar 📱';
-        await sendMessage(from, { type: 'text', text: { body: responseText } });
-      } else if (input === 'menu_buscar') {
-        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-        await sendPropertyTypeList(from);
-      } else if (input === 'menu_actualizar') {
-        userStates[numeroRemitente] = { step: 'update_lead_start' };
+      if (input === 'menu_check_contact') {
+        userStates[numeroRemitente] = { step: 'check_contact_start' };
         await sendMessage(from, {
           type: 'text',
-          text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos, sin 0/15) 📱' },
+          text: { body: '📱 Pasame el *celular* (10 dígitos, sin 0/15).' },
         });
+      } else if (input === 'menu_buscar') {
+        // (igual)
+      } else if (input === 'menu_actualizar') {
+        // (igual)
       } else {
-        await sendMainMenu(from); // <-- Botonera principal
+        await sendMainMenu(from);
       }
     }
   } catch (err) {
