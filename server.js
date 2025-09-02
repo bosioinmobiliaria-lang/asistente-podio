@@ -298,25 +298,34 @@ function ddmmyyyyFromStamp(stamp) {
   return `${D}/${M}/${Y}`;
 }
 async function createLeadWithDateFallback(fields, dateExternalId, when = new Date()) {
+  // Si no hay campo fecha o pediste saltearlo → crear sin fecha
   if (!dateExternalId || String(process.env.PODIO_LEADS_SKIP_DATE || '') === '1') {
     return createItemIn('leads', fields);
   }
 
-  // Normalizá 'when' por si viene string
+  // Normalizar fecha base
   const dt = when instanceof Date ? when : new Date(String(when).replace(' ', 'T'));
   const ymd = dt.toISOString().slice(0, 10);
   const stamp = `${ymd} 00:00:00`;
 
-  // Solo rangos (array de 1 objeto)
+  // PROBAR 6 VARIANTES (objeto/array × sin hora/con hora × single/range)
   const variants = [
-    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] }, // sin hora
-    { [dateExternalId]: [{ start: stamp, end: stamp }] }, // con hora
+    { [dateExternalId]: { start_date: ymd, end_date: ymd } }, // obj sin hora (range)
+    { [dateExternalId]: { start: stamp, end: stamp } }, // obj con hora (range)
+    { [dateExternalId]: { start_date: ymd } }, // obj sin hora (single)
+    { [dateExternalId]: { start: stamp } }, // obj con hora (single)
+    { [dateExternalId]: [{ start_date: ymd, end_date: ymd }] }, // array sin hora (range)
+    { [dateExternalId]: [{ start: stamp, end: stamp }] }, // array con hora (range)
   ];
 
   let lastErr;
   for (const v of variants) {
     try {
-      const payload = { ...fields, ...v }; // v pisa lo que venga en fields[dateExternalId]
+      // Asegurar que no hay una clave 'undefined' por accidente
+      const key = Object.keys(v)[0];
+      if (!key || key === 'undefined' || key === 'null') throw new Error('dateExternalId inválido');
+
+      const payload = { ...fields, ...v };
       console.log('[LEADS] Intento variante fecha →', JSON.stringify(payload, null, 2));
       return await createItemIn('leads', payload);
     } catch (e) {
@@ -1260,37 +1269,22 @@ async function createItemIn(appName, fields) {
   let payloadFields = cleanDeep(fields);
 
   if (appName === 'leads') {
-    const leadsMeta = await getLeadsFieldsMeta();
+    const meta = await getLeadsFieldsMeta();
+    const df = (meta || []).find(f => f.type === 'date');
+    const ext = process.env.PODIO_LEADS_DATE_EXTERNAL_ID || df?.external_id;
 
-    // Log corto (no sale del scope)
-    const df = (leadsMeta || []).find(f => f.type === 'date');
-    const wantTime = (df?.config?.settings?.time || 'disabled') !== 'disabled';
-    const wantRange = (df?.config?.settings?.end || 'disabled') !== 'disabled';
+    console.log('[LEADS] Date ext:', ext);
     console.log(
-      '[LEADS] Date ext:',
-      df?.external_id,
-      '| wantTime=',
-      wantTime,
-      ' | wantRange=',
-      wantRange,
+      '[LEADS] Payload (antes de POST) fecha →',
+      JSON.stringify(payloadFields?.[ext], null, 2),
     );
 
-    // (opcional) log extendido, pero SIEMPRE usando la misma variable local
-    const dateFieldsInfo = (leadsMeta || [])
-      .filter(f => f.type === 'date')
-      .map(f => ({
-        label: f.label,
-        external_id: f.external_id,
-        required: !!f.config?.required,
-        time: f?.config?.settings?.time || 'disabled',
-        end: f?.config?.settings?.end || 'disabled',
-      }));
-    console.log('[LEADS] Date fields meta →', JSON.stringify(dateFieldsInfo, null, 2));
+    if (!ext || payloadFields?.[ext] == null) {
+      throw new Error(`[LEADS] Falta el campo de fecha "${ext}" en el payload antes del POST`);
+    }
   }
 
-  // El resto de la función sigue igual...
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
-
   const { data } = await axios.post(
     `https://api.podio.com/item/app/${appId}/`,
     { fields: payloadFields },
