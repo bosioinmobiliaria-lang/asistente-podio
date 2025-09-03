@@ -974,6 +974,7 @@ async function sendFiltersList(to) {
             rows: [
               { id: 'f_loc', title: '📍 Por localidad' },
               { id: 'f_gas', title: '🔥 Gas natural' },
+              { id: 'f_doc', title: '📄 Documentación' }, // 👈 NUEVO
               { id: 'f_done', title: '✅ Listo (continuar)' },
             ],
           },
@@ -1082,6 +1083,27 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     // Si ya mostramos todo, ofrecer opciones finales
     await sendPostResultsOptions(to);
   }
+}
+
+// Lista dinámica de opciones del campo categoría "documentacion"
+async function sendDocumentacionList(to) {
+  const meta = await getAppMeta(process.env.PODIO_PROPIEDADES_APP_ID, 'propiedades');
+  const field = (meta.fields || []).find(f => f.external_id === 'documentacion');
+  const options = field?.config?.settings?.options || [];
+
+  const rows = options.slice(0, 10).map(o => ({
+    id: `doc_${o.id}`, // 👈 usamos el ID REAL de Podio
+    title: `📄 ${o.text}`.slice(0, 24), // WhatsApp: máx ~24 chars en título
+  }));
+
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: 'Elegí *documentación*:' },
+      action: { button: 'Elegir', sections: [{ title: 'Documentación', rows }] },
+    },
+  });
 }
 
 async function sendInquietudList(to) {
@@ -1229,6 +1251,9 @@ async function searchProperties(filters) {
 
   // Tipo (si ya lo tenías mapeado)
   if (filters.tipo) podioFilters['tipo-de-propiedad'] = [filters.tipo];
+
+  // Documentación (categoría): [optionId]
+  if (filters.documentacion) podioFilters['documentacion'] = [filters.documentacion];
 
   // Gas natural (categoría Sí/No)
   if (typeof filters.gas === 'boolean') {
@@ -2219,17 +2244,44 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'filters_menu': {
-          if (input === 'f_loc') {
-            currentState.step = 'awaiting_localidad';
-            await sendLocalidadList(from);
-          } else if (input === 'f_gas') {
-            currentState.step = 'awaiting_gas_filter';
-            await sendGasFilterButtons(from);
-          } else if (input === 'f_done') {
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
-          } else {
-            await sendFiltersList(from);
+          switch (input) {
+            case 'f_loc': {
+              currentState.step = 'awaiting_localidad';
+              await sendLocalidadList(from);
+              break;
+            }
+            case 'f_gas': {
+              currentState.step = 'awaiting_gas_filter';
+              await sendGasFilterButtons(from);
+              break;
+            }
+            case 'f_doc': {
+              // 👈 NUEVO: filtro por Documentación
+              currentState.step = 'awaiting_doc_filter';
+              await sendDocumentacionList(from);
+              break;
+            }
+            case 'f_done': {
+              // (opcional) mini-resumen de filtros activos antes de pasar a precio
+              const applied = [];
+              if (currentState.filters?.localidad) applied.push('📍 Localidad');
+              if (typeof currentState.filters?.gas === 'boolean') applied.push('🔥 Gas');
+              if (currentState.filters?.documentacion) applied.push('📄 Documentación');
+              if (applied.length) {
+                await sendMessage(from, {
+                  type: 'text',
+                  text: { body: `🧰 Filtros activos: ${applied.join(', ')}` },
+                });
+              }
+
+              currentState.step = 'awaiting_price_range';
+              await sendPriceRangeList(from);
+              break;
+            }
+            default: {
+              await sendFiltersList(from);
+              break;
+            }
           }
           break;
         }
@@ -2992,6 +3044,23 @@ app.post('/whatsapp', async (req, res) => {
           await sendMessage(from, { type: 'text', text: { body: `¡Gracias, *${name}*! 🙌` } });
           delete userStates[numeroRemitente]; // arrancamos limpio
           await sendMainMenu(from);
+          break;
+        }
+
+        case 'awaiting_doc_filter': {
+          const m = /^doc_(\d+)$/.exec(input || '');
+          if (!m) {
+            await sendDocumentacionList(from);
+            break;
+          }
+          currentState.filters = currentState.filters || {};
+          currentState.filters.documentacion = Number(m[1]); // 👈 guardamos el ID de opción
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: '✅ Filtro de *documentación* aplicado.' },
+          });
+          currentState.step = 'filters_menu';
+          await sendFiltersList(from);
           break;
         }
 
