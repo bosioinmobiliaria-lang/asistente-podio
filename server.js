@@ -1410,9 +1410,8 @@ async function createItemIn(appName, fields) {
       let v = payloadFields[ext];
 
       const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
 
-      // Si el campo es requerido y no vino, poné HOY
+      // Si el campo es requerido y no vino, poné HOY (como RANGO)
       if (!v && f.config?.required) {
         const ymd = new Date().toISOString().slice(0, 10);
         v = needTime
@@ -1421,36 +1420,29 @@ async function createItemIn(appName, fields) {
       }
       if (!v) continue;
 
-      // Si vino como array por error, tomá el primero
-      if (Array.isArray(v)) v = v[0];
+      // Si vino como array, tomar el primero; si vino objeto, clonar
+      v = Array.isArray(v) ? v[0] || {} : { ...v };
 
-      // Normalizá claves según tenga hora o no
-      const norm = { ...v };
+      // ✅ SIEMPRE enviar RANGO
       if (needTime) {
-        if (norm.start_date && !norm.start) norm.start = `${norm.start_date} 00:00:00`;
-        if (norm.end_date && !norm.end) norm.end = `${norm.end_date} 00:00:00`;
-        delete norm.start_date;
-        delete norm.end_date;
-        if (wantRange) {
-          if (norm.start && !norm.end) norm.end = norm.start;
-        } else {
-          delete norm.end;
-        }
+        if (v.start_date && !v.start) v.start = `${v.start_date} 00:00:00`;
+        if (v.end_date && !v.end) v.end = `${v.end_date} 00:00:00`;
+        if (v.start && !v.end) v.end = v.start;
+        delete v.start_date;
+        delete v.end_date;
       } else {
-        if (norm.start && !norm.start_date) norm.start_date = String(norm.start).split(' ')[0];
-        if (norm.end && !norm.end_date) norm.end_date = String(norm.end).split(' ')[0];
-        delete norm.start;
-        delete norm.end;
-        if (wantRange) {
-          if (norm.start_date && !norm.end_date) norm.end_date = norm.start_date;
-        } else {
-          delete norm.end_date;
-        }
+        if (v.start && !v.start_date) v.start_date = String(v.start).split(' ')[0];
+        if (v.end && !v.end_date) v.end_date = String(v.end).split(' ')[0];
+        if (v.start_date && !v.end_date) v.end_date = v.start_date;
+        delete v.start;
+        delete v.end;
       }
 
-      payloadFields[ext] = norm; // <-- OBJETO, no array
+      // ✅ Podio (create) espera ARRAY de objetos
+      payloadFields[ext] = [v];
     }
   }
+
 
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
   const { data } = await axios.post(
