@@ -1411,13 +1411,15 @@ async function createItemIn(appName, fields) {
 
       const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
 
-      // Si el campo es requerido y no vino, poné HOY (como RANGO)
-      if (!v && f.config?.required) {
-        const ymd = new Date().toISOString().slice(0, 10);
-        v = needTime
-          ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-          : { start_date: ymd, end_date: ymd };
+      if (Array.isArray(v) && v[0] && (v[0].start || v[0].start_date)) {
+      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+      if (wantRange) {
+        if (v[0].start && !v[0].end) v[0].end = v[0].start;
+        if (v[0].start_date && !v[0].end_date) v[0].end_date = v[0].start_date;
       }
+      payloadFields[ext] = v;
+      continue; // 👉 no normalizar de nuevo
+    }
       if (!v) continue;
 
       // Si vino como array, tomar el primero; si vino objeto, clonar
@@ -1439,7 +1441,7 @@ async function createItemIn(appName, fields) {
       }
 
       // ✅ Podio (create) espera ARRAY de objetos
-      payloadFields[ext] = [v];
+      payloadFields[ext] = [norm];
     }
   }
 
