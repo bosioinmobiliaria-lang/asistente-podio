@@ -1010,6 +1010,22 @@ async function sendLocalidadList(to) {
   });
 }
 
+async function sendPriceEntryPoint(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: '💸 Elegí cómo filtrar por *precio*:' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'price_btn_any', title: '🔓 Cualquier valor' } },
+          { type: 'reply', reply: { id: 'price_btn_range', title: '📊 Por rango' } },
+        ],
+      },
+    },
+  });
+}
+
 // 3.4) Rango de precio (lista de 10) — títulos cortos (≤24) + emojis
 async function sendPriceRangeList(to) {
   await sendMessage(to, {
@@ -1034,10 +1050,6 @@ async function sendPriceRangeList(to) {
               { id: 'price_9', title: '💸 U$S 160.000–200.000' },
               { id: 'price_10', title: '💎 Más de U$S 200.000' },
             ],
-          },
-          {
-            title: 'Otras',
-            rows: [{ id: 'price_any', title: '🔓 Cualquier valor' }],
           },
         ],
       },
@@ -2240,11 +2252,54 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'filters_menu';
             await sendFiltersList(from);
           } else if (input === 'filter_skip') {
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
+            currentState.step = 'awaiting_price_entry';
+            await sendPriceEntryPoint(from);
           } else {
             await sendPropertyFilterButtons(from);
           }
+          break;
+        }
+
+        case 'awaiting_price_entry': {
+          if (input === 'price_btn_any') {
+            delete currentState.filters?.precio;
+            const results = await searchProperties(currentState.filters);
+            if (!results?.length) {
+              currentState.step = 'awaiting_price_retry';
+              currentState.priceLevel = 'main';
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar un rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
+                },
+              });
+              break;
+            }
+            currentState.step = 'showing_results';
+            currentState.results = results;
+            currentState.nextIndex = 0;
+            await sendPropertiesPage(from, results, 0);
+            currentState.nextIndex += 5;
+            break;
+          }
+
+          if (input === 'price_btn_range') {
+            currentState.step = 'awaiting_price_range';
+            await sendPriceRangeList(from);
+            break;
+          }
+
+          await sendPriceEntryPoint(from); // fallback si escribe otra cosa
           break;
         }
 
@@ -2272,14 +2327,12 @@ app.post('/whatsapp', async (req, res) => {
             }
 
             case 'f_done': {
-              // 👇 mini-resumen prolijo (uno por línea, con emoji)
               const lines = [];
               if (currentState.filters.localidad) lines.push('• 📍 Localidad');
               if (typeof currentState.filters.gas === 'boolean') {
                 lines.push(`• 🔥 Gas: ${currentState.filters.gas ? 'Sí' : 'No'}`);
               }
               if (currentState.filters.documentacion) lines.push('• 📄 Documentación');
-
               if (lines.length) {
                 await sendMessage(from, {
                   type: 'text',
@@ -2287,8 +2340,8 @@ app.post('/whatsapp', async (req, res) => {
                 });
               }
 
-              currentState.step = 'awaiting_price_range';
-              await sendPriceRangeList(from);
+              currentState.step = 'awaiting_price_entry';
+              await sendPriceEntryPoint(from);
               break;
             }
 
