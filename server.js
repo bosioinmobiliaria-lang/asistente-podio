@@ -1256,8 +1256,9 @@ async function searchProperties(filters) {
   if (filters.documentacion) podioFilters['documentacion'] = [filters.documentacion];
 
   // Gas natural (categoría Sí/No)
+  // Gas natural
   if (typeof filters.gas === 'boolean') {
-    const label = filters.gas ? 'Sí' : 'No'; // ajustá si tus opciones son "Si/No", "Con/Sin", etc.
+    const label = filters.gas ? 'Si' : 'No'; // <— sin tilde
     const gasId = await getCategoryOptionIdPropiedades('gas-natural', label);
     if (gasId) podioFilters['gas-natural'] = [gasId];
   }
