@@ -1032,8 +1032,12 @@ async function sendPriceRangeList(to) {
               { id: 'price_7', title: '💸 U$S 100.000–130.000' },
               { id: 'price_8', title: '💸 U$S 130.000–160.000' },
               { id: 'price_9', title: '💸 U$S 160.000–200.000' },
-              { id: 'price_10', title: '💸 Más de U$S 200.000' }, // dispara high
+              { id: 'price_10', title: '💎 Más de U$S 200.000' },
             ],
+          },
+          {
+            title: 'Otras',
+            rows: [{ id: 'price_any', title: '🔓 Cualquier valor' }],
           },
         ],
       },
@@ -2245,33 +2249,41 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'filters_menu': {
+          currentState.filters = currentState.filters || {};
+
           switch (input) {
             case 'f_loc': {
               currentState.step = 'awaiting_localidad';
               await sendLocalidadList(from);
               break;
             }
+
             case 'f_gas': {
               currentState.step = 'awaiting_gas_filter';
               await sendGasFilterButtons(from);
               break;
             }
+
             case 'f_doc': {
-              // 👈 NUEVO: filtro por Documentación
+              // 👇 nuevo filtro por Documentación
               currentState.step = 'awaiting_doc_filter';
               await sendDocumentacionList(from);
               break;
             }
+
             case 'f_done': {
-              // (opcional) mini-resumen de filtros activos antes de pasar a precio
-              const applied = [];
-              if (currentState.filters?.localidad) applied.push('📍 Localidad');
-              if (typeof currentState.filters?.gas === 'boolean') applied.push('🔥 Gas');
-              if (currentState.filters?.documentacion) applied.push('📄 Documentación');
-              if (applied.length) {
+              // 👇 mini-resumen prolijo (uno por línea, con emoji)
+              const lines = [];
+              if (currentState.filters.localidad) lines.push('• 📍 Localidad');
+              if (typeof currentState.filters.gas === 'boolean') {
+                lines.push(`• 🔥 Gas: ${currentState.filters.gas ? 'Sí' : 'No'}`);
+              }
+              if (currentState.filters.documentacion) lines.push('• 📄 Documentación');
+
+              if (lines.length) {
                 await sendMessage(from, {
                   type: 'text',
-                  text: { body: `🧰 Filtros activos: ${applied.join(', ')}` },
+                  text: { body: `🧰 *Filtros activos*\n${lines.join('\n')}` },
                 });
               }
 
@@ -2279,6 +2291,7 @@ app.post('/whatsapp', async (req, res) => {
               await sendPriceRangeList(from);
               break;
             }
+
             default: {
               await sendFiltersList(from);
               break;
@@ -2330,6 +2343,41 @@ app.post('/whatsapp', async (req, res) => {
 
         // ===== Rango principal =====
         case 'awaiting_price_range': {
+          // Opción: ver todas (sin limitar por precio)
+          if (input === 'price_any') {
+            delete currentState.filters?.precio; // aseguramos que no quede rango previo
+
+            const results = await searchProperties(currentState.filters);
+            if (!results || !results.length) {
+              currentState.step = 'awaiting_price_retry';
+              currentState.priceLevel = 'main';
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
+                },
+              });
+              break;
+            }
+
+            currentState.step = 'showing_results';
+            currentState.results = results;
+            currentState.nextIndex = 0;
+            await sendPropertiesPage(from, results, currentState.nextIndex);
+            currentState.nextIndex += 5;
+            break;
+          }
+
           const m = /^price_(\d+)$/.exec(input || '');
           if (!m) {
             await sendPriceRangeList(from);
