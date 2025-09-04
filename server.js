@@ -2739,47 +2739,40 @@ app.post('/whatsapp', async (req, res) => {
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
+            // 1) meta de Leads para ubicar el campo fecha real
             const meta = await getLeadsFieldsMeta();
+            const dateFieldMeta = meta.find(f => f.type === 'date');
+            const dateExternalId =
+              process.env.PODIO_LEADS_DATE_EXTERNAL_ID || dateFieldMeta?.external_id || 'fecha';
 
-            // fuerza "hoy" como rango, por las dudas
-            const today = new Date().toISOString().slice(0, 10);
-            fields.fecha = { start: `${today} 00:00:00`, end: `${today} 00:00:00` };
-
-            // -----------------------------------------------------------------
-            // ✅ SOLUCIÓN FINAL: Corregimos el formato de TODOS los campos de categoría
-            // En lugar de [id], el formato correcto es [{ value: id }]
-            // -----------------------------------------------------------------
+            // 2) armamos el payload base
             let fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
               'vendedor-asignado-2': [vendedorId],
 
-              // categorías:
+              // categorías (IDs numéricos)
               'lead-status': [currentState.leadDraft.inquietud],
               'presupuesto-2': [currentState.leadDraft.presupuesto],
               busca: [currentState.leadDraft.busca],
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
             };
 
-            // Restauramos la lógica de la fecha, que ahora sabemos que era inocente
-            const dateFieldMeta = meta.find(f => f.type === 'date');
-            const dateExternalId = dateFieldMeta?.external_id || null;
+            // 3) forzar HOY como RANGO según configuración del campo fecha
+            const today = new Date().toISOString().slice(0, 10);
+            const needTime = (dateFieldMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+            fields[dateExternalId] = needTime
+              ? { start: `${today} 00:00:00`, end: `${today} 00:00:00` }
+              : { start_date: today, end_date: today };
+
+            console.log(
+              '[LEADS] FINAL PAYLOAD (ANTES CREATE) →',
+              JSON.stringify({ fields }, null, 2),
+            );
+            console.log('[LEADS] dateExternalId →', dateExternalId);
 
             const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
 
-            // donde armás el payload para crear
-            if (fields[dateExternalId]) {
-              const v = fields[dateExternalId];
-              console.log(
-                '[DEBUG] fecha (antes):',
-                Array.isArray(v) ? 'ARRAY' : 'OBJECT',
-                Array.isArray(v) ? Object.keys(v[0] || {}) : Object.keys(v),
-              );
-            }
-
-            console.log('[LEADS] FINAL PAYLOAD (CORREGIDO) →', JSON.stringify({ fields }, null, 2));
-
-            // ✅ OK
             currentState.leadItemId = created.item_id;
             currentState.step = 'awaiting_newlead_voice';
             delete currentState.lastInputType;
@@ -2790,18 +2783,16 @@ app.post('/whatsapp', async (req, res) => {
             });
             await sendMessage(from, {
               type: 'text',
-              text: {
-                body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
-              },
+              text: { body: '🎙️ Si querés, mandá un audio o texto y lo guardo como nota.' },
             });
           } catch (e) {
-            console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-            });
-            delete userStates[numeroRemitente];
-          }
+  console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
+  await sendMessage(from, {
+    type: 'text',
+    text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+  });
+  delete userStates[numeroRemitente];
+}
           break;
         }
 
