@@ -1415,102 +1415,124 @@ async function createItemIn(appName, fields) {
 
   const token = await getAppAccessTokenFor(appName);
 
-  // 🔹 Importante: limpiamos al principio pero luego NO volvemos a limpiar,
-  // para no borrar objetos de fecha válidos.
-  let payloadFields = cleanDeep(fields);
+  // Limpieza defensiva (si tenés cleanDeep, úsalo; si no, sigue igual).
+  const inputFields = typeof cleanDeep === 'function' ? cleanDeep(fields) : fields || {};
 
-  if (appName === 'leads') {
-    const meta = await getLeadsFieldsMeta();
-    const dateFields = (meta || []).filter(f => f.type === 'date');
+  // Solo traigo meta para LEADS; en otros apps no filtro por meta.
+  const meta = appName === 'leads' ? (await getLeadsFieldsMeta()) || [] : [];
+  const hasMeta = Array.isArray(meta) && meta.length > 0;
+  const byExt = hasMeta ? new Map(meta.map(f => [f.external_id, f])) : null;
 
-    for (const f of dateFields) {
-      const ext = f.external_id;
-      let v = payloadFields[ext];
+  // Construyo el payload desde cero (evita claves sueltas tipo "start_date" al nivel raíz).
+  const payloadFields = {};
 
-      // Config del campo en Podio
-      const timeEnabled = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-      const endEnabled = (f?.config?.settings?.end || 'disabled') !== 'disabled';
-      const required = !!f?.config?.required;
+  if (hasMeta) {
+    // Con meta: solo acepto claves que sean fields reales del app.
+    for (const [ext, raw] of Object.entries(inputFields)) {
+      const m = byExt.get(ext);
+      if (!m) continue; // ignora claves desconocidas
 
-      // Si es requerido y no vino nada → usar HOY
-      if (!v && required) {
-        const ymd = new Date().toISOString().slice(0, 10);
-        v = timeEnabled
-          ? endEnabled
-            ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-            : { start: `${ymd} 00:00:00` }
-          : endEnabled
-            ? { start_date: ymd, end_date: ymd }
-            : { start_date: ymd };
-      }
-
-      if (!v) continue;
-
-      // Si vino como array por error, quedate con el primero
-      if (Array.isArray(v)) v = v[0];
-
-      // Normalización sin perder la intención original
-      const norm = { ...v };
-
-      if (timeEnabled) {
-        // Pasar a claves con hora (start/end)
-        if (norm.start_date && !norm.start) norm.start = `${norm.start_date} 00:00:00`;
-        if (norm.end_date && !norm.end) norm.end = `${norm.end_date} 00:00:00`;
-        delete norm.start_date;
-        delete norm.end_date;
-
-        // Si el campo es rango y falta end → igualar a start
-        if (endEnabled) {
-          if (norm.start && !norm.end) norm.end = norm.start;
-        } else {
-          // Si NO es rango, no mandes 'end'
-          delete norm.end;
-        }
+      if (m.type === 'date') {
+        const needTime = (m?.config?.settings?.time || 'disabled') !== 'disabled';
+        const wantRange = (m?.config?.settings?.end || 'disabled') !== 'disabled';
+        const v = normalizeDateForPodioSafe(raw, { needTime, wantRange });
+        if (v) payloadFields[ext] = v; // nunca mandes null/obj vacío
       } else {
-        // Pasar a claves sin hora (start_date/end_date)
-        if (norm.start && !norm.start_date) norm.start_date = String(norm.start).split(' ')[0];
-        if (norm.end && !norm.end_date) norm.end_date = String(norm.end).split(' ')[0];
-        delete norm.start;
-        delete norm.end;
-
-        if (endEnabled) {
-          if (norm.start_date && !norm.end_date) norm.end_date = norm.start_date;
-        } else {
-          delete norm.end_date;
-        }
+        payloadFields[ext] = raw;
       }
-
-      // ✅ Para Podio los date son OBJETO, no array
-      payloadFields[ext] = norm;
     }
-
-    // Debug útil: ver cómo está configurada la fecha y qué mandamos
-    const fechaMeta = dateFields.find(d => d.external_id === 'fecha');
-    console.log(
-      '[LEADS] Fecha config →',
-      JSON.stringify(
-        {
-          external_id: fechaMeta?.external_id,
-          time: fechaMeta?.config?.settings?.time,
-          end: fechaMeta?.config?.settings?.end,
-          required: fechaMeta?.config?.required,
-        },
-        null,
-        2,
-      ),
-    );
+  } else {
+    // Sin meta (p.ej. contactos): paso todo tal cual.
+    Object.assign(payloadFields, inputFields);
   }
 
-  console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
+  // Log útil
+  console.log(`[${appName.toUpperCase()}] Payload FINAL →`, JSON.stringify(payloadFields, null, 2));
 
-  // ❗️No agregues variantes al root como "start_date" o similares.
-  // El body tiene que ser SIEMPRE { fields: { ...external_ids... } }
-  const { data } = await axios.post(
-    `https://api.podio.com/item/app/${appId}/`,
-    { fields: payloadFields },
-    { headers: { Authorization: `OAuth2 ${token}` }, timeout: 30000 },
-  );
-  return data;
+  // POST principal
+  try {
+    const { data } = await axios.post(
+      `https://api.podio.com/item/app/${appId}/`,
+      { fields: payloadFields },
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 30000 },
+    );
+    return data;
+  } catch (err) {
+    const msg = err?.response?.data?.error_description || String(err?.message || '');
+    console.log(`[${appName.toUpperCase()}] Error create →`, msg);
+
+    // Fallback: si el servidor insiste con "must be Range", reintento forzando end = start.
+    if (/must be Range/i.test(msg) && hasMeta) {
+      for (const [ext, m] of byExt.entries()) {
+        if (m?.type === 'date' && payloadFields[ext]) {
+          const v = payloadFields[ext];
+          if (v.start && !v.end) v.end = v.start;
+          if (v.start_date && !v.end_date) v.end_date = v.start_date;
+        }
+      }
+      console.log(
+        `[${appName.toUpperCase()}] Reintento forzando rango →`,
+        JSON.stringify(payloadFields, null, 2),
+      );
+      const { data } = await axios.post(
+        `https://api.podio.com/item/app/${appId}/`,
+        { fields: payloadFields },
+        { headers: { Authorization: `OAuth2 ${token}` }, timeout: 30000 },
+      );
+      return data;
+    }
+
+    // Propaga si no era el caso anterior
+    throw err;
+  }
+}
+
+// ✅ Normalizador defensivo (renombrado para evitar colisiones)
+function normalizeDateForPodioSafe(input, { needTime, wantRange }) {
+  if (!input) return null;
+
+  // Si ya viene con formato Podio, úsalo y completa el rango si falta.
+  if (typeof input === 'object' && (input.start || input.start_date)) {
+    const out = { ...input };
+    if (wantRange) {
+      if (out.start && !out.end) out.end = out.start;
+      if (out.start_date && !out.end_date) out.end_date = out.start_date;
+    } else {
+      // Si el campo es single, asegúrate de no dejar claves "end*"
+      delete out.end;
+      delete out.end_date;
+    }
+    return out;
+  }
+
+  // Normaliza string o Date → YYYY-MM-DD y HH:MM:SS
+  let dateStr = null;
+  let timeStr = '00:00:00';
+
+  if (input instanceof Date) {
+    dateStr = input.toISOString().slice(0, 10);
+  } else if (typeof input === 'string') {
+    const m = input.trim().match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?$/);
+    if (!m) return null;
+    dateStr = m[1];
+    timeStr = m[2] || '00:00:00';
+  } else if (typeof input === 'object') {
+    // Soporta { date, time } o { start_date } mínimo
+    dateStr = input.date || input.start_date || null;
+    timeStr = input.time || '00:00:00';
+  }
+
+  if (!dateStr) return null;
+
+  if (needTime) {
+    const out = { start: `${dateStr} ${timeStr}` };
+    if (wantRange) out.end = out.start;
+    return out;
+  } else {
+    const out = { start_date: dateStr };
+    if (wantRange) out.end_date = out.start_date;
+    return out;
+  }
 }
 
 async function getAppMeta(appId, which = 'contactos') {
