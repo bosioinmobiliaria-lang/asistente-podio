@@ -1412,65 +1412,99 @@ async function sendFarewell(to) {
 async function createItemIn(appName, fields) {
   const appId =
     appName === 'leads' ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
+
   const token = await getAppAccessTokenFor(appName);
+
+  // 🔹 Importante: limpiamos al principio pero luego NO volvemos a limpiar,
+  // para no borrar objetos de fecha válidos.
   let payloadFields = cleanDeep(fields);
 
   if (appName === 'leads') {
     const meta = await getLeadsFieldsMeta();
     const dateFields = (meta || []).filter(f => f.type === 'date');
 
-    // 🧹 Guardia: nunca mandar estas claves sueltas como si fueran campos
-    ['start', 'start_date', 'end', 'end_date'].forEach(k => {
-      if (k in payloadFields) delete payloadFields[k];
-    });
-
     for (const f of dateFields) {
       const ext = f.external_id;
       let v = payloadFields[ext];
 
-      const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-      const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+      // Config del campo en Podio
+      const timeEnabled = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+      const endEnabled = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+      const required = !!f?.config?.required;
 
-      // Si el campo es requerido y no vino, poné HOY
-      if (!v && f.config?.required) {
+      // Si es requerido y no vino nada → usar HOY
+      if (!v && required) {
         const ymd = new Date().toISOString().slice(0, 10);
-        v = needTime
-          ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-          : { start_date: ymd, end_date: ymd };
+        v = timeEnabled
+          ? endEnabled
+            ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+            : { start: `${ymd} 00:00:00` }
+          : endEnabled
+            ? { start_date: ymd, end_date: ymd }
+            : { start_date: ymd };
       }
+
       if (!v) continue;
 
+      // Si vino como array por error, quedate con el primero
       if (Array.isArray(v)) v = v[0];
 
-      // ✅ Normalización segura
-      let normalized = { ...v };
-      if (needTime) {
-        if (normalized.start_date && !normalized.start)
-          normalized.start = `${normalized.start_date} 00:00:00`;
-        if (normalized.end_date && !normalized.end)
-          normalized.end = `${normalized.end_date} 00:00:00`;
-        delete normalized.start_date;
-        delete normalized.end_date;
-        if (wantRange && normalized.start && !normalized.end) normalized.end = normalized.start;
-        if (!wantRange) delete normalized.end;
+      // Normalización sin perder la intención original
+      const norm = { ...v };
+
+      if (timeEnabled) {
+        // Pasar a claves con hora (start/end)
+        if (norm.start_date && !norm.start) norm.start = `${norm.start_date} 00:00:00`;
+        if (norm.end_date && !norm.end) norm.end = `${norm.end_date} 00:00:00`;
+        delete norm.start_date;
+        delete norm.end_date;
+
+        // Si el campo es rango y falta end → igualar a start
+        if (endEnabled) {
+          if (norm.start && !norm.end) norm.end = norm.start;
+        } else {
+          // Si NO es rango, no mandes 'end'
+          delete norm.end;
+        }
       } else {
-        if (normalized.start && !normalized.start_date)
-          normalized.start_date = String(normalized.start).split(' ')[0];
-        if (normalized.end && !normalized.end_date)
-          normalized.end_date = String(normalized.end).split(' ')[0];
-        delete normalized.start;
-        delete normalized.end;
-        if (wantRange && normalized.start_date && !normalized.end_date)
-          normalized.end_date = normalized.start_date;
-        if (!wantRange) delete normalized.end_date;
+        // Pasar a claves sin hora (start_date/end_date)
+        if (norm.start && !norm.start_date) norm.start_date = String(norm.start).split(' ')[0];
+        if (norm.end && !norm.end_date) norm.end_date = String(norm.end).split(' ')[0];
+        delete norm.start;
+        delete norm.end;
+
+        if (endEnabled) {
+          if (norm.start_date && !norm.end_date) norm.end_date = norm.start_date;
+        } else {
+          delete norm.end_date;
+        }
       }
 
-      payloadFields[ext] = normalized; // ← OBJETO (no array)
+      // ✅ Para Podio los date son OBJETO, no array
+      payloadFields[ext] = norm;
     }
+
+    // Debug útil: ver cómo está configurada la fecha y qué mandamos
+    const fechaMeta = dateFields.find(d => d.external_id === 'fecha');
+    console.log(
+      '[LEADS] Fecha config →',
+      JSON.stringify(
+        {
+          external_id: fechaMeta?.external_id,
+          time: fechaMeta?.config?.settings?.time,
+          end: fechaMeta?.config?.settings?.end,
+          required: fechaMeta?.config?.required,
+        },
+        null,
+        2,
+      ),
+    );
   }
 
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
 
+  // ❗️No agregues variantes al root como "start_date" o similares.
+  // El body tiene que ser SIEMPRE { fields: { ...external_ids... } }
   const { data } = await axios.post(
     `https://api.podio.com/item/app/${appId}/`,
     { fields: payloadFields },
