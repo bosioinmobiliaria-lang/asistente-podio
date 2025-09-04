@@ -386,28 +386,39 @@ function extractLastSeguimientoLine(wholeText) {
 }
 
 // --- Resultados de propiedades (WhatsApp) ---
-function formatSinglePropertyText(prop, globalIndex) {
-  const title = prop.title;
-  const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-  const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-  const linkField =
-    prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
-    prop.fields.find(f => f.external_id === 'enlace');
+function formatResults(properties, startIndex, batchSize = 5) {
+  const batch = properties.slice(startIndex, startIndex + batchSize);
+  let message =
+    startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
 
-  const valor = valorField
-    ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
-    : 'Valor no especificado';
-  const localidadLimpia = localidadField
-    ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
-    : 'No especificada';
-  const localidad = `📍 Localidad: *${localidadLimpia}*`;
+  batch.forEach((prop, index) => {
+    const title = prop.title;
+    const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+    const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+    const linkField =
+      prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
+      prop.fields.find(f => f.external_id === 'enlace'); // fallback
 
-  let link = 'Sin enlace web';
-  const raw = linkField?.values?.[0]?.value;
-  const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
-  if (url) link = url;
+    const valor = valorField
+      ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
+      : 'Valor no especificado';
+    const localidadLimpia = localidadField
+      ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
+      : 'No especificada';
+    const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
-  return `*${globalIndex}. ${title}*\n${valor}\n${localidad}\n${link}`;
+    let link = 'Sin enlace web';
+    const raw = linkField?.values?.[0]?.value;
+    // Soporta <a href="...">, texto plano con URL, o objetos con .url
+    const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
+    if (url) link = url;
+
+    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
+    if (index < batch.length - 1) message += '\n\n----------\n\n';
+  });
+
+  const hasMore = startIndex + batchSize < properties.length;
+  return { message: message.trim(), hasMore };
 }
 
 // --- Utilidades Lead / Podio ---
@@ -989,41 +1000,28 @@ async function sendFiltersList(to) {
 
 // 3.3) Lista de localidades (usa tu LOCALIDAD_MAP)
 async function sendLocalidadList(to) {
-  try {
-    const meta = await getAppMeta(process.env.PODIO_PROPIEDADES_APP_ID, 'propiedades');
-    const field = (meta.fields || []).find(f => f.external_id === 'localidad');
-    const options = field?.config?.settings?.options || [];
-
-    // Si no hay opciones, enviamos un error y no continuamos.
-    if (!options.length) {
-      await sendMessage(to, {
-        type: 'text',
-        text: { body: '❌ No pude cargar las localidades desde Podio.' },
-      });
-      return;
-    }
-
-    // Creamos las filas para el menú de WhatsApp. Usamos el ID real de la opción de Podio.
-    const rows = options.slice(0, 10).map(opt => ({
-      id: `loc_${opt.id}`, // Usamos el ID real: loc_1, loc_2, etc.
-      title: `📍 ${opt.text}`.slice(0, 24), // Acortamos si es muy largo
-    }));
-
-    await sendMessage(to, {
-      type: 'interactive',
-      interactive: {
-        type: 'list',
-        body: { text: 'Elegí la localidad:' },
-        action: { button: 'Elegir', sections: [{ title: 'Localidades', rows }] },
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: 'Elegí la localidad:' },
+      action: {
+        button: 'Elegir',
+        sections: [
+          {
+            title: 'Localidades',
+            rows: [
+              { id: 'loc_1', title: '📍 Villa del Dique' },
+              { id: 'loc_2', title: '📍 Villa Rumipal' },
+              { id: 'loc_3', title: '📍 Santa Rosa' },
+              { id: 'loc_4', title: '📍 Amboy' },
+              { id: 'loc_5', title: '📍 San Ignacio' },
+            ],
+          },
+        ],
       },
-    });
-  } catch (e) {
-    console.error('Error al generar lista de localidades:', e);
-    await sendMessage(to, {
-      type: 'text',
-      text: { body: 'Hubo un problema obteniendo las localidades.' },
-    });
-  }
+    },
+  });
 }
 
 async function sendPriceEntryPoint(to) {
@@ -1099,67 +1097,20 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batch = properties.slice(startIndex, startIndex + PROPERTY_BATCH_SIZE);
+  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
+  await sendMessage(to, { type: 'text', text: { body: message } });
 
-  // Mensaje inicial solo para la primera página
-  if (startIndex === 0) {
-    await sendMessage(to, {
-      type: 'text',
-      text: {
-        body: `✅ ¡Encontré ${properties.length} propiedades disponibles! Te muestro las primeras:`,
-      },
-    });
-    // Pequeña pausa después del saludo inicial
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  for (let i = 0; i < batch.length; i++) {
-    const prop = batch[i];
-    const globalIndex = startIndex + i + 1;
-    let isImageSent = false;
-
-    // 1. Buscar y enviar la imagen de forma segura
-    const imageField = prop.fields.find(f => f.external_id === 'image');
-    const firstImage = imageField?.values?.[0];
-
-    if (firstImage?.link) {
-      try {
-        await sendMessage(to, {
-          type: 'image',
-          image: { link: firstImage.link },
-        });
-        isImageSent = true;
-      } catch (e) {
-        console.error(`Error al enviar imagen para item ${prop.item_id}:`, e.message);
-        // Si hay un error, nos aseguramos de que el flag quede en false
-        isImageSent = false;
-      }
-    }
-
-    // 2. Formatear y enviar el texto descriptivo
-    const propertyText = formatSinglePropertyText(prop, globalIndex);
-    // Si no se envió la imagen, agregamos una nota al texto
-    const finalMessage = isImageSent ? propertyText : `(Sin foto) ${propertyText}`;
-
-    await sendMessage(to, { type: 'text', text: { body: finalMessage } });
-
-    // 3. (RECOMENDADO) Pausa entre cada propiedad para una mejor experiencia
-    await new Promise(r => setTimeout(r, 750));
-  }
-
-  // 4. Enviar opciones de paginación o finales
-  const hasMore = startIndex + PROPERTY_BATCH_SIZE < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
       interactive: {
         type: 'button',
-        body: { text: `Mostrando ${startIndex + batch.length} de ${properties.length}. ¿Ver más?` },
+        body: { text: '¿Ver más resultados?' },
         action: { buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }] },
       },
     });
   } else {
-    await sendMessage(to, { type: 'text', text: { body: 'Esos son todos los resultados.' } });
+    // Si ya mostramos todo, ofrecer opciones finales
     await sendPostResultsOptions(to);
   }
 }
@@ -1321,53 +1272,53 @@ async function searchProperties(filters) {
   const token = await getAppAccessTokenFor('propiedades');
 
   const podioFilters = { estado: [ID_ESTADO_DISPONIBLE] };
+
+  // Precio (número): {from, to}
   if (filters.precio) podioFilters['valor-de-la-propiedad'] = filters.precio;
+
+  // Localidad (categoría): [optionId]
   if (filters.localidad) podioFilters['localidad'] = [filters.localidad];
+
+  // Tipo (si ya lo tenías mapeado)
   if (filters.tipo) podioFilters['tipo-de-propiedad'] = [filters.tipo];
+
+  // Documentación (categoría): [optionId]
   if (filters.documentacion) podioFilters['documentacion'] = [filters.documentacion];
+
+  // Gas natural (categoría Sí/No)
+  // Gas natural
   if (typeof filters.gas === 'boolean') {
-    const label = filters.gas ? 'Si' : 'No';
+    const label = filters.gas ? 'Si' : 'No'; // <— sin tilde
     const gasId = await getCategoryOptionIdPropiedades('gas-natural', label);
     if (gasId) podioFilters['gas-natural'] = [gasId];
   }
 
-  console.log(
-    '--- FILTROS ENVIADOS A PODIO ---',
-    JSON.stringify({ filters: podioFilters }, null, 2),
-  );
+  console.log('--- FILTROS ENVIADOS A PODIO ---');
+  console.log(JSON.stringify({ filters: podioFilters }, null, 2));
+  console.log('---------------------------------');
 
-  // 1) Filtrar (rápido) — ya trae items con algo de info
-  const { data } = await axios.post(
-    `https://api.podio.com/item/app/${appId}/filter/`,
-    { filters: podioFilters, limit: 50, sort_by: 'created_on', sort_desc: true },
-    { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
-  );
-
-  const itemsFromFilter = data.items || [];
-  const ids = itemsFromFilter.map(i => i.item_id);
-  if (!ids.length) return [];
-
-  // 2) Traer detalles con concurrencia limitada (para fotos, etc.)
-  const CONCURRENCY = 5;
-  const results = [];
-  for (let i = 0; i < ids.length; i += CONCURRENCY) {
-    const slice = ids.slice(i, i + CONCURRENCY);
-    const batch = await Promise.all(
-      slice.map(id =>
-        axios
-          .get(`https://api.podio.com/item/${id}`, {
-            headers: { Authorization: `OAuth2 ${token}` },
-            timeout: 20000,
-          })
-          .then(r => r.data)
-          .catch(() => null),
-      ),
+  try {
+    const response = await axios.post(
+      `https://api.podio.com/item/app/${appId}/filter/`,
+      {
+        filters: podioFilters,
+        limit: 20,
+        sort_by: 'created_on',
+        sort_desc: true,
+      },
+      {
+        headers: { Authorization: `OAuth2 ${token}` },
+        timeout: 20000,
+      },
     );
-    results.push(...batch.filter(Boolean));
+    return response.data.items;
+  } catch (err) {
+    console.error(
+      'Error al buscar propiedades en Podio:',
+      err.response ? err.response.data : err.message,
+    );
+    return [];
   }
-
-  // Si por algún motivo falló todo el paso 2, devolvemos lo que ya teníamos
-  return results.length ? results : itemsFromFilter;
 }
 
 // Botonera de acciones sobre un lead encontrado
@@ -2005,8 +1956,6 @@ const LOCALIDAD_MAP = {
   5: 5, // San Ignacio
 };
 
-const PROPERTY_BATCH_SIZE = 3;
-
 const TIPO_PROPIEDAD_MAP = {
   1: 1, // Lote
   2: 2, // Casa
@@ -2414,7 +2363,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex = PROPERTY_BATCH_SIZE;
+            currentState.nextIndex += 5;
             break;
           }
 
@@ -2480,26 +2429,25 @@ app.post('/whatsapp', async (req, res) => {
 
         // ===== Localidad (si eligió filtrar) =====
         case 'awaiting_localidad': {
-          const m = /^loc_(\d+)$/.exec(input || ''); // Ahora esperamos un ID numérico
+          const m = /^loc_(\d)$/.exec(input || '');
           if (!m) {
             await sendLocalidadList(from);
             break;
           }
 
-          const locId = parseInt(m[1], 10); // Convertimos el ID a número
+          await ensureLocalidadMap();
+          const locKey = m[1];
+          const locId = LOCALIDAD_MAP_DYNAMIC[locKey];
           if (!locId) {
             await sendLocalidadList(from);
             break;
           }
 
           currentState.filters = currentState.filters || {};
-          currentState.filters.localidad = locId; // Guardamos el ID numérico directamente
+          currentState.filters.localidad = locId;
 
-          // ¡OJO! Aquí quitamos el paso intermedio de gas y vamos directo al menú de filtros
-          // para que el usuario pueda elegir si quiere agregar más filtros o continuar.
-          currentState.step = 'filters_menu';
-          await sendMessage(from, { type: 'text', text: { body: '✅ Localidad seleccionada.' } });
-          await sendFiltersList(from); // Volvemos al menú de filtros
+          currentState.step = 'awaiting_gas_filter';
+          await sendGasFilterButtons(from);
           break;
         }
 
@@ -2553,7 +2501,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, currentState.nextIndex);
-            currentState.nextIndex = PROPERTY_BATCH_SIZE;
+            currentState.nextIndex += 5;
             break;
           }
 
@@ -2606,7 +2554,7 @@ app.post('/whatsapp', async (req, res) => {
           currentState.results = results;
           currentState.nextIndex = 0;
           await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex = PROPERTY_BATCH_SIZE;
+          currentState.nextIndex += 5;
           break;
         }
 
@@ -2652,7 +2600,7 @@ app.post('/whatsapp', async (req, res) => {
           currentState.results = results;
           currentState.nextIndex = 0;
           await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex = PROPERTY_BATCH_SIZE;
+          currentState.nextIndex += 5;
 
           break;
         }
@@ -2669,7 +2617,7 @@ app.post('/whatsapp', async (req, res) => {
               break;
             }
             await sendPropertiesPage(from, results, idx);
-            currentState.nextIndex = idx + PROPERTY_BATCH_SIZE;
+            currentState.nextIndex = idx + 5;
           } else {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
@@ -3244,23 +3192,6 @@ app.post('/whatsapp', async (req, res) => {
               },
             },
           });
-          break;
-        }
-
-        case 'showing_results': {
-          if (input === 'props_more') {
-            const results = currentState.results || [];
-            const idx = currentState.nextIndex || 0;
-            if (idx >= results.length) {
-              // ...
-              break;
-            }
-            await sendPropertiesPage(from, results, idx);
-            // ✅ Se incrementa por el valor correcto
-            currentState.nextIndex = idx + PROPERTY_BATCH_SIZE;
-          } else {
-            // ...
-          }
           break;
         }
 
