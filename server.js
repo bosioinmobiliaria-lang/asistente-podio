@@ -1419,111 +1419,58 @@ async function createItemIn(appName, fields) {
     const meta = await getLeadsFieldsMeta();
     const dateFields = (meta || []).filter(f => f.type === 'date');
 
+    // 🧹 Guardia: nunca mandar estas claves sueltas como si fueran campos
+    ['start', 'start_date', 'end', 'end_date'].forEach(k => {
+      if (k in payloadFields) delete payloadFields[k];
+    });
+
     for (const f of dateFields) {
       const ext = f.external_id;
-      let raw = payloadFields[ext];
+      let v = payloadFields[ext];
 
       const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
       const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
 
-      // Si es requerido y no vino, ponemos HOY
-      if (!raw && f.config?.required) {
+      // Si el campo es requerido y no vino, poné HOY
+      if (!v && f.config?.required) {
         const ymd = new Date().toISOString().slice(0, 10);
-        raw = needTime
+        v = needTime
           ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
           : { start_date: ymd, end_date: ymd };
       }
-      if (!raw) continue;
+      if (!v) continue;
 
-      // Si vino como array, tomamos el primero
-      if (Array.isArray(raw)) raw = raw[0];
+      if (Array.isArray(v)) v = v[0];
 
-      let normalized;
-
-      // Caso: ya viene con claves con hora
-      if (raw.start || raw.end) {
-        const o = { ...raw };
-        delete o.start_date;
-        delete o.end_date;
-        if (needTime) {
-          if (wantRange && o.start && !o.end) o.end = o.start;
-          if (!wantRange) delete o.end;
-          normalized = o;
-        } else {
-          // Convertimos a _date
-          const d = (o.start || '').toString().split(' ')[0];
-          const e = (o.end || d).toString().split(' ')[0];
-          normalized = wantRange ? { start_date: d, end_date: e } : { start_date: d };
-        }
-      }
-      // Caso: ya viene con claves _date
-      else if (raw.start_date || raw.end_date) {
-        const o = { ...raw };
-        delete o.start;
-        delete o.end;
-        if (needTime) {
-          const d = o.start_date || o.end_date; // YYYY-MM-DD
-          const stamp = `${d} 00:00:00`;
-          normalized = wantRange ? { start: stamp, end: stamp } : { start: stamp };
-        } else {
-          if (wantRange && o.start_date && !o.end_date) o.end_date = o.start_date;
-          if (!wantRange) delete o.end_date;
-          normalized = o;
-        }
-      }
-      // Cualquier otro caso, dejamos igual
-      else {
-        normalized = raw;
+      // ✅ Normalización segura
+      let normalized = { ...v };
+      if (needTime) {
+        if (normalized.start_date && !normalized.start)
+          normalized.start = `${normalized.start_date} 00:00:00`;
+        if (normalized.end_date && !normalized.end)
+          normalized.end = `${normalized.end_date} 00:00:00`;
+        delete normalized.start_date;
+        delete normalized.end_date;
+        if (wantRange && normalized.start && !normalized.end) normalized.end = normalized.start;
+        if (!wantRange) delete normalized.end;
+      } else {
+        if (normalized.start && !normalized.start_date)
+          normalized.start_date = String(normalized.start).split(' ')[0];
+        if (normalized.end && !normalized.end_date)
+          normalized.end_date = String(normalized.end).split(' ')[0];
+        delete normalized.start;
+        delete normalized.end;
+        if (wantRange && normalized.start_date && !normalized.end_date)
+          normalized.end_date = normalized.start_date;
+        if (!wantRange) delete normalized.end_date;
       }
 
-      payloadFields[ext] = normalized;
-    }
-  }
-
-  const meta = await getLeadsFieldsMeta();
-  const dateFields = (meta || []).filter(f => f.type === 'date');
-
-  for (const f of dateFields) {
-    const ext = f.external_id;
-    let val = payloadFields[ext];
-
-    const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-    const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
-
-    // si es requerido y no vino, poné hoy (como rango)
-    if (!val && f.config?.required) {
-      const ymd = new Date().toISOString().slice(0, 10);
-      val = needTime
-        ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-        : { start_date: ymd, end_date: ymd };
-    }
-    if (!val) continue;
-    if (Array.isArray(val)) val = val[0];
-
-    // 🔒 normalización segura (sin usar 'norm')
-    if (needTime) {
-      const start = val.start ?? (val.start_date ? `${val.start_date} 00:00:00` : undefined);
-      const end = wantRange
-        ? (val.end ?? (val.end_date ? `${val.end_date} 00:00:00` : start))
-        : undefined;
-
-      if (!start) continue; // evita null → "must be Range"
-      payloadFields[ext] = wantRange ? { start, end: end ?? start } : { start };
-    } else {
-      const start_date =
-        val.start_date ?? (val.start ? String(val.start).split(' ')[0] : undefined);
-      const end_date = wantRange
-        ? (val.end_date ?? (val.end ? String(val.end).split(' ')[0] : start_date))
-        : undefined;
-
-      if (!start_date) continue; // evita null
-      payloadFields[ext] = wantRange
-        ? { start_date, end_date: end_date ?? start_date }
-        : { start_date };
+      payloadFields[ext] = normalized; // ← OBJETO (no array)
     }
   }
 
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
+
   const { data } = await axios.post(
     `https://api.podio.com/item/app/${appId}/`,
     { fields: payloadFields },
@@ -2765,66 +2712,67 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'create_lead_expectativa': {
-  const id = EXPECTATIVA_MAP[input];
-  if (!id) {
-    await sendExpectativaList(from);
-    break;
-  }
-  currentState.leadDraft.expectativa = id;
+          const id = EXPECTATIVA_MAP[input];
+          if (!id) {
+            await sendExpectativaList(from);
+            break;
+          }
+          currentState.leadDraft.expectativa = id;
 
-  try {
-    const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-    const meta = await getLeadsFieldsMeta();
+          try {
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-    // Campos del lead
-    const leadFields = {
-      'contacto-2': [{ item_id: currentState.contactItemId }],
-      'telefono-busqueda': currentState.tempPhoneDigits,
-      'vendedor-asignado-2': [vendedorId],
+            // ⚠️ SOLO categorías + refs. Nada de start_date/start/end acá.
+            const fields = {
+              'contacto-2': [{ item_id: currentState.contactItemId }],
+              'telefono-busqueda': currentState.tempPhoneDigits,
+              'vendedor-asignado-2': [vendedorId],
+              'lead-status': [currentState.leadDraft.inquietud],
+              'presupuesto-2': [currentState.leadDraft.presupuesto],
+              busca: [currentState.leadDraft.busca],
+              'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+            };
 
-      // categorías (IDs de opción)
-      'lead-status': [currentState.leadDraft.inquietud],
-      'presupuesto-2': [currentState.leadDraft.presupuesto],
-      busca: [currentState.leadDraft.busca],
-      'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
+            // Descubrimos cuál es el campo fecha (external_id real) y dejamos
+            // que el helper pruebe rango sin hora y con hora.
+            const meta = await getLeadsFieldsMeta();
+            const dateExternalId =
+              process.env.PODIO_LEADS_DATE_EXTERNAL_ID ||
+              meta.find(f => f.type === 'date')?.external_id ||
+              null;
 
-      // ⚙️ fecha correcta para hoy (range/hora según meta real)
-      ...buildLeadDateForToday(meta),
-    };
+            console.log(
+              '[LEADS] FINAL PAYLOAD (ANTES CREATE) →',
+              JSON.stringify({ fields }, null, 2),
+            );
 
-    console.log(
-      '[LEADS] FINAL PAYLOAD (ANTES CREATE) →',
-      JSON.stringify({ fields: leadFields }, null, 2),
-    );
+            // 👉 Esto intenta 1) {start_date,end_date} y si falla 2) {start,end}
+            const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
 
-    // Crea el lead (createItemIn ya normaliza fechas si hiciera falta)
-    const created = await createItemIn('leads', leadFields);
+            currentState.leadItemId = created.item_id;
+            currentState.step = 'awaiting_newlead_voice';
+            delete currentState.lastInputType;
 
-    // ✅ OK
-    currentState.leadItemId = created.item_id;
-    currentState.step = 'awaiting_newlead_voice';
-    delete currentState.lastInputType;
-
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '✅ *Lead creado y vinculado al contacto.*' },
-    });
-    await sendMessage(from, {
-      type: 'text',
-      text: {
-        body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
-      },
-    });
-  } catch (e) {
-    console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
-    });
-    delete userStates[numeroRemitente];
-  }
-  break;
-}
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Lead creado y vinculado al contacto.*' },
+            });
+            await sendMessage(from, {
+              type: 'text',
+              text: {
+                body: '🎙️ Si querés, dejá *un audio* o texto con lo conversado y lo guardo como nota.',
+              },
+            });
+          } catch (e) {
+            console.error('[LEADS] FALLÓ DEFINITIVO:', e?.response?.data || e.message);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '❌ No pude crear el Lead. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
 
         case 'awaiting_newlead_voice': {
           const leadId = currentState.leadItemId;
