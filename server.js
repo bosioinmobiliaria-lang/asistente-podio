@@ -1086,8 +1086,7 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const BATCH_SIZE = 3; // Reducimos el lote para una mejor experiencia visual
-  const batch = properties.slice(startIndex, startIndex + BATCH_SIZE);
+  const batch = properties.slice(startIndex, startIndex + PROPERTY_BATCH_SIZE);
 
   // Mensaje inicial solo para la primera página
   if (startIndex === 0) {
@@ -1097,32 +1096,46 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
         body: `✅ ¡Encontré ${properties.length} propiedades disponibles! Te muestro las primeras:`,
       },
     });
+    // Pequeña pausa después del saludo inicial
+    await new Promise(r => setTimeout(r, 500));
   }
 
   for (let i = 0; i < batch.length; i++) {
     const prop = batch[i];
     const globalIndex = startIndex + i + 1;
+    let isImageSent = false;
 
-    // 1. Buscar y enviar la imagen
-    // ✅ ID externo correcto según tu configuración de Podio.
+    // 1. Buscar y enviar la imagen de forma segura
     const imageField = prop.fields.find(f => f.external_id === 'image');
     const firstImage = imageField?.values?.[0];
 
     if (firstImage?.link) {
-      // La API de WhatsApp necesita un link público directo a la imagen. El de Podio funciona.
-      await sendMessage(to, {
-        type: 'image',
-        image: { link: firstImage.link },
-      });
+      try {
+        await sendMessage(to, {
+          type: 'image',
+          image: { link: firstImage.link },
+        });
+        isImageSent = true;
+      } catch (e) {
+        console.error(`Error al enviar imagen para item ${prop.item_id}:`, e.message);
+        // Si hay un error, nos aseguramos de que el flag quede en false
+        isImageSent = false;
+      }
     }
 
     // 2. Formatear y enviar el texto descriptivo
     const propertyText = formatSinglePropertyText(prop, globalIndex);
-    await sendMessage(to, { type: 'text', text: { body: propertyText } });
+    // Si no se envió la imagen, agregamos una nota al texto
+    const finalMessage = isImageSent ? propertyText : `(Sin foto) ${propertyText}`;
+
+    await sendMessage(to, { type: 'text', text: { body: finalMessage } });
+
+    // 3. (RECOMENDADO) Pausa entre cada propiedad para una mejor experiencia
+    await new Promise(r => setTimeout(r, 750));
   }
 
-  // 3. Enviar opciones de paginación o finales
-  const hasMore = startIndex + BATCH_SIZE < properties.length;
+  // 4. Enviar opciones de paginación o finales
+  const hasMore = startIndex + PROPERTY_BATCH_SIZE < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1978,6 +1991,8 @@ const LOCALIDAD_MAP = {
   4: 4, // Amboy
   5: 5, // San Ignacio
 };
+
+const PROPERTY_BATCH_SIZE = 3;
 
 const TIPO_PROPIEDAD_MAP = {
   1: 1, // Lote
@@ -3215,6 +3230,23 @@ app.post('/whatsapp', async (req, res) => {
               },
             },
           });
+          break;
+        }
+
+        case 'showing_results': {
+          if (input === 'props_more') {
+            const results = currentState.results || [];
+            const idx = currentState.nextIndex || 0;
+            if (idx >= results.length) {
+              // ...
+              break;
+            }
+            await sendPropertiesPage(from, results, idx);
+            // ✅ Se incrementa por el valor correcto
+            currentState.nextIndex = idx + PROPERTY_BATCH_SIZE;
+          } else {
+            // ...
+          }
           break;
         }
 
