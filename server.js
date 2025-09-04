@@ -1445,6 +1445,47 @@ async function createItemIn(appName, fields) {
     }
   }
 
+const meta = await getLeadsFieldsMeta();
+const dateFields = (meta || []).filter(f => f.type === 'date');
+
+for (const f of dateFields) {
+  const ext = f.external_id;
+  let val = payloadFields[ext];
+
+  const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+  const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+
+  // si es requerido y no vino, poné hoy (como rango)
+  if (!val && f.config?.required) {
+    const ymd = new Date().toISOString().slice(0, 10);
+    val = needTime
+      ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+      : { start_date: ymd, end_date: ymd };
+  }
+  if (!val) continue;
+  if (Array.isArray(val)) val = val[0];
+
+  // 🔒 normalización segura (sin usar 'norm')
+  if (needTime) {
+    const start = val.start ?? (val.start_date ? `${val.start_date} 00:00:00` : undefined);
+    const end = wantRange
+      ? (val.end ?? (val.end_date ? `${val.end_date} 00:00:00` : start))
+      : undefined;
+
+    if (!start) continue; // evita null → "must be Range"
+    payloadFields[ext] = wantRange ? { start, end: end ?? start } : { start };
+  } else {
+    const start_date = val.start_date ?? (val.start ? String(val.start).split(' ')[0] : undefined);
+    const end_date = wantRange
+      ? (val.end_date ?? (val.end ? String(val.end).split(' ')[0] : start_date))
+      : undefined;
+
+    if (!start_date) continue; // evita null
+    payloadFields[ext] = wantRange
+      ? { start_date, end_date: end_date ?? start_date }
+      : { start_date };
+  }
+}
 
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
   const { data } = await axios.post(
@@ -2699,6 +2740,10 @@ app.post('/whatsapp', async (req, res) => {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
             const meta = await getLeadsFieldsMeta();
+
+            // fuerza "hoy" como rango, por las dudas
+            const today = new Date().toISOString().slice(0, 10);
+            fields.fecha = { start: `${today} 00:00:00`, end: `${today} 00:00:00` };
 
             // -----------------------------------------------------------------
             // ✅ SOLUCIÓN FINAL: Corregimos el formato de TODOS los campos de categoría
