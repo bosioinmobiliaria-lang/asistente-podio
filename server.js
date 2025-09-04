@@ -1336,40 +1336,38 @@ async function searchProperties(filters) {
     JSON.stringify({ filters: podioFilters }, null, 2),
   );
 
-  try {
-    // PASO 1: Filtrar y obtener solo los IDs (esto es rápido)
-    const filterResponse = await axios.post(
-      `https://api.podio.com/item/app/${appId}/filter/`,
-      {
-        filters: podioFilters,
-        limit: 50, // Obtenemos hasta 50 IDs
-        sort_by: 'created_on',
-        sort_desc: true,
-      },
-      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
+  // 1) Filtrar (rápido) — ya trae items con algo de info
+  const { data } = await axios.post(
+    `https://api.podio.com/item/app/${appId}/filter/`,
+    { filters: podioFilters, limit: 50, sort_by: 'created_on', sort_desc: true },
+    { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
+  );
+
+  const itemsFromFilter = data.items || [];
+  const ids = itemsFromFilter.map(i => i.item_id);
+  if (!ids.length) return [];
+
+  // 2) Traer detalles con concurrencia limitada (para fotos, etc.)
+  const CONCURRENCY = 5;
+  const results = [];
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    const slice = ids.slice(i, i + CONCURRENCY);
+    const batch = await Promise.all(
+      slice.map(id =>
+        axios
+          .get(`https://api.podio.com/item/${id}`, {
+            headers: { Authorization: `OAuth2 ${token}` },
+            timeout: 20000,
+          })
+          .then(r => r.data)
+          .catch(() => null),
+      ),
     );
-
-    const itemIds = filterResponse.data.items.map(item => item.item_id);
-
-    if (itemIds.length === 0) {
-      return []; // Si no hay resultados, devolvemos un array vacío
-    }
-
-    // PASO 2: Pedir los detalles COMPLETOS de esos IDs en una sola llamada
-    const itemsResponse = await axios.get(
-      `https://api.podio.com/item/${itemIds.join(',')}`, // ej: /item/123,456,789
-      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
-    );
-
-    // Devolvemos los items con toda la información (incluyendo links de imágenes)
-    return itemsResponse.data;
-  } catch (err) {
-    console.error(
-      'Error al buscar propiedades en Podio:',
-      err.response ? err.response.data : err.message,
-    );
-    return [];
+    results.push(...batch.filter(Boolean));
   }
+
+  // Si por algún motivo falló todo el paso 2, devolvemos lo que ya teníamos
+  return results.length ? results : itemsFromFilter;
 }
 
 // Botonera de acciones sobre un lead encontrado
@@ -2416,7 +2414,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex += 5;
+            currentState.nextIndex = PROPERTY_BATCH_SIZE;
             break;
           }
 
@@ -2555,7 +2553,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, currentState.nextIndex);
-            currentState.nextIndex += 5;
+            currentState.nextIndex = PROPERTY_BATCH_SIZE;
             break;
           }
 
@@ -2608,7 +2606,7 @@ app.post('/whatsapp', async (req, res) => {
           currentState.results = results;
           currentState.nextIndex = 0;
           await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex += 5;
+          currentState.nextIndex = PROPERTY_BATCH_SIZE;
           break;
         }
 
@@ -2654,7 +2652,7 @@ app.post('/whatsapp', async (req, res) => {
           currentState.results = results;
           currentState.nextIndex = 0;
           await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex += 5;
+          currentState.nextIndex = PROPERTY_BATCH_SIZE;
 
           break;
         }
