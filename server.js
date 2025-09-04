@@ -386,39 +386,28 @@ function extractLastSeguimientoLine(wholeText) {
 }
 
 // --- Resultados de propiedades (WhatsApp) ---
-function formatResults(properties, startIndex, batchSize = 5) {
-  const batch = properties.slice(startIndex, startIndex + batchSize);
-  let message =
-    startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
+function formatSinglePropertyText(prop, globalIndex) {
+  const title = prop.title;
+  const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+  const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+  const linkField =
+    prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
+    prop.fields.find(f => f.external_id === 'enlace');
 
-  batch.forEach((prop, index) => {
-    const title = prop.title;
-    const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-    const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-    const linkField =
-      prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
-      prop.fields.find(f => f.external_id === 'enlace'); // fallback
+  const valor = valorField
+    ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
+    : 'Valor no especificado';
+  const localidadLimpia = localidadField
+    ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
+    : 'No especificada';
+  const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
-    const valor = valorField
-      ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
-      : 'Valor no especificado';
-    const localidadLimpia = localidadField
-      ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
-      : 'No especificada';
-    const localidad = `📍 Localidad: *${localidadLimpia}*`;
+  let link = 'Sin enlace web';
+  const raw = linkField?.values?.[0]?.value;
+  const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
+  if (url) link = url;
 
-    let link = 'Sin enlace web';
-    const raw = linkField?.values?.[0]?.value;
-    // Soporta <a href="...">, texto plano con URL, o objetos con .url
-    const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
-    if (url) link = url;
-
-    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
-    if (index < batch.length - 1) message += '\n\n----------\n\n';
-  });
-
-  const hasMore = startIndex + batchSize < properties.length;
-  return { message: message.trim(), hasMore };
+  return `*${globalIndex}. ${title}*\n${valor}\n${localidad}\n${link}`;
 }
 
 // --- Utilidades Lead / Podio ---
@@ -1097,20 +1086,54 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
-  await sendMessage(to, { type: 'text', text: { body: message } });
+  const BATCH_SIZE = 3; // Reducimos el lote para una mejor experiencia visual
+  const batch = properties.slice(startIndex, startIndex + BATCH_SIZE);
 
+  // Mensaje inicial solo para la primera página
+  if (startIndex === 0) {
+    await sendMessage(to, {
+      type: 'text',
+      text: {
+        body: `✅ ¡Encontré ${properties.length} propiedades disponibles! Te muestro las primeras:`,
+      },
+    });
+  }
+
+  for (let i = 0; i < batch.length; i++) {
+    const prop = batch[i];
+    const globalIndex = startIndex + i + 1;
+
+    // 1. Buscar y enviar la imagen
+    // ✅ ID externo correcto según tu configuración de Podio.
+    const imageField = prop.fields.find(f => f.external_id === 'image');
+    const firstImage = imageField?.values?.[0];
+
+    if (firstImage?.link) {
+      // La API de WhatsApp necesita un link público directo a la imagen. El de Podio funciona.
+      await sendMessage(to, {
+        type: 'image',
+        image: { link: firstImage.link },
+      });
+    }
+
+    // 2. Formatear y enviar el texto descriptivo
+    const propertyText = formatSinglePropertyText(prop, globalIndex);
+    await sendMessage(to, { type: 'text', text: { body: propertyText } });
+  }
+
+  // 3. Enviar opciones de paginación o finales
+  const hasMore = startIndex + BATCH_SIZE < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
       interactive: {
         type: 'button',
-        body: { text: '¿Ver más resultados?' },
+        body: { text: `Mostrando ${startIndex + batch.length} de ${properties.length}. ¿Ver más?` },
         action: { buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }] },
       },
     });
   } else {
-    // Si ya mostramos todo, ofrecer opciones finales
+    await sendMessage(to, { type: 'text', text: { body: 'Esos son todos los resultados.' } });
     await sendPostResultsOptions(to);
   }
 }
