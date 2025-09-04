@@ -989,28 +989,41 @@ async function sendFiltersList(to) {
 
 // 3.3) Lista de localidades (usa tu LOCALIDAD_MAP)
 async function sendLocalidadList(to) {
-  await sendMessage(to, {
-    type: 'interactive',
-    interactive: {
-      type: 'list',
-      body: { text: 'Elegí la localidad:' },
-      action: {
-        button: 'Elegir',
-        sections: [
-          {
-            title: 'Localidades',
-            rows: [
-              { id: 'loc_1', title: '📍 Villa del Dique' },
-              { id: 'loc_2', title: '📍 Villa Rumipal' },
-              { id: 'loc_3', title: '📍 Santa Rosa' },
-              { id: 'loc_4', title: '📍 Amboy' },
-              { id: 'loc_5', title: '📍 San Ignacio' },
-            ],
-          },
-        ],
+  try {
+    const meta = await getAppMeta(process.env.PODIO_PROPIEDADES_APP_ID, 'propiedades');
+    const field = (meta.fields || []).find(f => f.external_id === 'localidad');
+    const options = field?.config?.settings?.options || [];
+
+    // Si no hay opciones, enviamos un error y no continuamos.
+    if (!options.length) {
+      await sendMessage(to, {
+        type: 'text',
+        text: { body: '❌ No pude cargar las localidades desde Podio.' },
+      });
+      return;
+    }
+
+    // Creamos las filas para el menú de WhatsApp. Usamos el ID real de la opción de Podio.
+    const rows = options.slice(0, 10).map(opt => ({
+      id: `loc_${opt.id}`, // Usamos el ID real: loc_1, loc_2, etc.
+      title: `📍 ${opt.text}`.slice(0, 24), // Acortamos si es muy largo
+    }));
+
+    await sendMessage(to, {
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: 'Elegí la localidad:' },
+        action: { button: 'Elegir', sections: [{ title: 'Localidades', rows }] },
       },
-    },
-  });
+    });
+  } catch (e) {
+    console.error('Error al generar lista de localidades:', e);
+    await sendMessage(to, {
+      type: 'text',
+      text: { body: 'Hubo un problema obteniendo las localidades.' },
+    });
+  }
 }
 
 async function sendPriceEntryPoint(to) {
@@ -1308,46 +1321,48 @@ async function searchProperties(filters) {
   const token = await getAppAccessTokenFor('propiedades');
 
   const podioFilters = { estado: [ID_ESTADO_DISPONIBLE] };
-
-  // Precio (número): {from, to}
   if (filters.precio) podioFilters['valor-de-la-propiedad'] = filters.precio;
-
-  // Localidad (categoría): [optionId]
   if (filters.localidad) podioFilters['localidad'] = [filters.localidad];
-
-  // Tipo (si ya lo tenías mapeado)
   if (filters.tipo) podioFilters['tipo-de-propiedad'] = [filters.tipo];
-
-  // Documentación (categoría): [optionId]
   if (filters.documentacion) podioFilters['documentacion'] = [filters.documentacion];
-
-  // Gas natural (categoría Sí/No)
-  // Gas natural
   if (typeof filters.gas === 'boolean') {
-    const label = filters.gas ? 'Si' : 'No'; // <— sin tilde
+    const label = filters.gas ? 'Si' : 'No';
     const gasId = await getCategoryOptionIdPropiedades('gas-natural', label);
     if (gasId) podioFilters['gas-natural'] = [gasId];
   }
 
-  console.log('--- FILTROS ENVIADOS A PODIO ---');
-  console.log(JSON.stringify({ filters: podioFilters }, null, 2));
-  console.log('---------------------------------');
+  console.log(
+    '--- FILTROS ENVIADOS A PODIO ---',
+    JSON.stringify({ filters: podioFilters }, null, 2),
+  );
 
   try {
-    const response = await axios.post(
+    // PASO 1: Filtrar y obtener solo los IDs (esto es rápido)
+    const filterResponse = await axios.post(
       `https://api.podio.com/item/app/${appId}/filter/`,
       {
         filters: podioFilters,
-        limit: 20,
+        limit: 50, // Obtenemos hasta 50 IDs
         sort_by: 'created_on',
         sort_desc: true,
       },
-      {
-        headers: { Authorization: `OAuth2 ${token}` },
-        timeout: 20000,
-      },
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
     );
-    return response.data.items;
+
+    const itemIds = filterResponse.data.items.map(item => item.item_id);
+
+    if (itemIds.length === 0) {
+      return []; // Si no hay resultados, devolvemos un array vacío
+    }
+
+    // PASO 2: Pedir los detalles COMPLETOS de esos IDs en una sola llamada
+    const itemsResponse = await axios.get(
+      `https://api.podio.com/item/${itemIds.join(',')}`, // ej: /item/123,456,789
+      { headers: { Authorization: `OAuth2 ${token}` }, timeout: 20000 },
+    );
+
+    // Devolvemos los items con toda la información (incluyendo links de imágenes)
+    return itemsResponse.data;
   } catch (err) {
     console.error(
       'Error al buscar propiedades en Podio:',
@@ -2467,25 +2482,26 @@ app.post('/whatsapp', async (req, res) => {
 
         // ===== Localidad (si eligió filtrar) =====
         case 'awaiting_localidad': {
-          const m = /^loc_(\d)$/.exec(input || '');
+          const m = /^loc_(\d+)$/.exec(input || ''); // Ahora esperamos un ID numérico
           if (!m) {
             await sendLocalidadList(from);
             break;
           }
 
-          await ensureLocalidadMap();
-          const locKey = m[1];
-          const locId = LOCALIDAD_MAP_DYNAMIC[locKey];
+          const locId = parseInt(m[1], 10); // Convertimos el ID a número
           if (!locId) {
             await sendLocalidadList(from);
             break;
           }
 
           currentState.filters = currentState.filters || {};
-          currentState.filters.localidad = locId;
+          currentState.filters.localidad = locId; // Guardamos el ID numérico directamente
 
-          currentState.step = 'awaiting_gas_filter';
-          await sendGasFilterButtons(from);
+          // ¡OJO! Aquí quitamos el paso intermedio de gas y vamos directo al menú de filtros
+          // para que el usuario pueda elegir si quiere agregar más filtros o continuar.
+          currentState.step = 'filters_menu';
+          await sendMessage(from, { type: 'text', text: { body: '✅ Localidad seleccionada.' } });
+          await sendFiltersList(from); // Volvemos al menú de filtros
           break;
         }
 
@@ -2655,7 +2671,7 @@ app.post('/whatsapp', async (req, res) => {
               break;
             }
             await sendPropertiesPage(from, results, idx);
-            currentState.nextIndex = idx + 5;
+            currentState.nextIndex = idx + PROPERTY_BATCH_SIZE;
           } else {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
