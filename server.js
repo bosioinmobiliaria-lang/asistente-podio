@@ -88,20 +88,16 @@ function buildPodioDateObject(input, wantRange = false) {
 }
 
 // --- util chiquita: arma la fecha correcta para Leads (range/horas según meta)
-function buildLeadDateForToday(meta) {
-  const df = (meta || []).find(f => f.type === 'date');
-  if (!df) return {}; // por si alguna vez removés el campo
+function buildLeadDateForToday(dateFieldMeta, when = new Date()) {
+  const ymd = when.toISOString().slice(0, 10); // YYYY-MM-DD
+  const needTime = (dateFieldMeta?.config?.settings?.time || 'disabled') !== 'disabled';
+  const wantRange = (dateFieldMeta?.config?.settings?.end || 'disabled') !== 'disabled';
 
-  const ext = df.external_id;              // ej: "fecha"
-  const ymd = new Date().toISOString().slice(0, 10);
-  const wantTime  = (df?.config?.settings?.time || 'disabled') !== 'disabled';
-  const wantRange = (df?.config?.settings?.end  || 'disabled') !== 'disabled';
-
-  if (wantTime) {
+  if (needTime) {
     const stamp = `${ymd} 00:00:00`;
-    return { [ext]: wantRange ? { start: stamp,     end: stamp     } : { start: stamp } };
+    return wantRange ? { start: stamp, end: stamp } : { start: stamp };
   } else {
-    return { [ext]: wantRange ? { start_date: ymd,  end_date: ymd  } : { start_date: ymd } };
+    return wantRange ? { start_date: ymd, end_date: ymd } : { start_date: ymd };
   }
 }
 
@@ -1425,85 +1421,107 @@ async function createItemIn(appName, fields) {
 
     for (const f of dateFields) {
       const ext = f.external_id;
-      let v = payloadFields[ext];
+      let raw = payloadFields[ext];
 
       const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-
-      if (Array.isArray(v) && v[0] && (v[0].start || v[0].start_date)) {
       const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
-      if (wantRange) {
-        if (v[0].start && !v[0].end) v[0].end = v[0].start;
-        if (v[0].start_date && !v[0].end_date) v[0].end_date = v[0].start_date;
+
+      // Si es requerido y no vino, ponemos HOY
+      if (!raw && f.config?.required) {
+        const ymd = new Date().toISOString().slice(0, 10);
+        raw = needTime
+          ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+          : { start_date: ymd, end_date: ymd };
       }
-      payloadFields[ext] = v;
-      continue; // 👉 no normalizar de nuevo
-    }
-      if (!v) continue;
+      if (!raw) continue;
 
-      // Si vino como array, tomar el primero; si vino objeto, clonar
-      v = Array.isArray(v) ? v[0] || {} : { ...v };
+      // Si vino como array, tomamos el primero
+      if (Array.isArray(raw)) raw = raw[0];
 
-      // ✅ SIEMPRE enviar RANGO
-      if (needTime) {
-        if (v.start_date && !v.start) v.start = `${v.start_date} 00:00:00`;
-        if (v.end_date && !v.end) v.end = `${v.end_date} 00:00:00`;
-        if (v.start && !v.end) v.end = v.start;
-        delete v.start_date;
-        delete v.end_date;
-      } else {
-        if (v.start && !v.start_date) v.start_date = String(v.start).split(' ')[0];
-        if (v.end && !v.end_date) v.end_date = String(v.end).split(' ')[0];
-        if (v.start_date && !v.end_date) v.end_date = v.start_date;
-        delete v.start;
-        delete v.end;
+      let normalized;
+
+      // Caso: ya viene con claves con hora
+      if (raw.start || raw.end) {
+        const o = { ...raw };
+        delete o.start_date;
+        delete o.end_date;
+        if (needTime) {
+          if (wantRange && o.start && !o.end) o.end = o.start;
+          if (!wantRange) delete o.end;
+          normalized = o;
+        } else {
+          // Convertimos a _date
+          const d = (o.start || '').toString().split(' ')[0];
+          const e = (o.end || d).toString().split(' ')[0];
+          normalized = wantRange ? { start_date: d, end_date: e } : { start_date: d };
+        }
+      }
+      // Caso: ya viene con claves _date
+      else if (raw.start_date || raw.end_date) {
+        const o = { ...raw };
+        delete o.start;
+        delete o.end;
+        if (needTime) {
+          const d = o.start_date || o.end_date; // YYYY-MM-DD
+          const stamp = `${d} 00:00:00`;
+          normalized = wantRange ? { start: stamp, end: stamp } : { start: stamp };
+        } else {
+          if (wantRange && o.start_date && !o.end_date) o.end_date = o.start_date;
+          if (!wantRange) delete o.end_date;
+          normalized = o;
+        }
+      }
+      // Cualquier otro caso, dejamos igual
+      else {
+        normalized = raw;
       }
 
-      // ✅ Podio (create) espera ARRAY de objetos
-      payloadFields[ext] = [norm];
+      payloadFields[ext] = normalized;
     }
   }
 
-const meta = await getLeadsFieldsMeta();
-const dateFields = (meta || []).filter(f => f.type === 'date');
+  const meta = await getLeadsFieldsMeta();
+  const dateFields = (meta || []).filter(f => f.type === 'date');
 
-for (const f of dateFields) {
-  const ext = f.external_id;
-  let val = payloadFields[ext];
+  for (const f of dateFields) {
+    const ext = f.external_id;
+    let val = payloadFields[ext];
 
-  const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
-  const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
+    const needTime = (f?.config?.settings?.time || 'disabled') !== 'disabled';
+    const wantRange = (f?.config?.settings?.end || 'disabled') !== 'disabled';
 
-  // si es requerido y no vino, poné hoy (como rango)
-  if (!val && f.config?.required) {
-    const ymd = new Date().toISOString().slice(0, 10);
-    val = needTime
-      ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
-      : { start_date: ymd, end_date: ymd };
+    // si es requerido y no vino, poné hoy (como rango)
+    if (!val && f.config?.required) {
+      const ymd = new Date().toISOString().slice(0, 10);
+      val = needTime
+        ? { start: `${ymd} 00:00:00`, end: `${ymd} 00:00:00` }
+        : { start_date: ymd, end_date: ymd };
+    }
+    if (!val) continue;
+    if (Array.isArray(val)) val = val[0];
+
+    // 🔒 normalización segura (sin usar 'norm')
+    if (needTime) {
+      const start = val.start ?? (val.start_date ? `${val.start_date} 00:00:00` : undefined);
+      const end = wantRange
+        ? (val.end ?? (val.end_date ? `${val.end_date} 00:00:00` : start))
+        : undefined;
+
+      if (!start) continue; // evita null → "must be Range"
+      payloadFields[ext] = wantRange ? { start, end: end ?? start } : { start };
+    } else {
+      const start_date =
+        val.start_date ?? (val.start ? String(val.start).split(' ')[0] : undefined);
+      const end_date = wantRange
+        ? (val.end_date ?? (val.end ? String(val.end).split(' ')[0] : start_date))
+        : undefined;
+
+      if (!start_date) continue; // evita null
+      payloadFields[ext] = wantRange
+        ? { start_date, end_date: end_date ?? start_date }
+        : { start_date };
+    }
   }
-  if (!val) continue;
-  if (Array.isArray(val)) val = val[0];
-
-  // 🔒 normalización segura (sin usar 'norm')
-  if (needTime) {
-    const start = val.start ?? (val.start_date ? `${val.start_date} 00:00:00` : undefined);
-    const end = wantRange
-      ? (val.end ?? (val.end_date ? `${val.end_date} 00:00:00` : start))
-      : undefined;
-
-    if (!start) continue; // evita null → "must be Range"
-    payloadFields[ext] = wantRange ? { start, end: end ?? start } : { start };
-  } else {
-    const start_date = val.start_date ?? (val.start ? String(val.start).split(' ')[0] : undefined);
-    const end_date = wantRange
-      ? (val.end_date ?? (val.end ? String(val.end).split(' ')[0] : start_date))
-      : undefined;
-
-    if (!start_date) continue; // evita null
-    payloadFields[ext] = wantRange
-      ? { start_date, end_date: end_date ?? start_date }
-      : { start_date };
-  }
-}
 
   console.log('[LEADS] Payload FINAL →', JSON.stringify(payloadFields, null, 2));
   const { data } = await axios.post(
