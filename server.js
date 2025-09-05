@@ -2436,7 +2436,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex += 3;
+            currentState.nextIndex = (currentState.nextIndex || 0) + 3;
             break;
           }
 
@@ -2573,8 +2573,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'showing_results';
             currentState.results = results;
             currentState.nextIndex = 0;
-            await sendPropertiesPage(from, results, idx);
-            currentState.nextIndex = idx + 3;
+            await sendPropertiesPage(from, results, 0);
+            currentState.nextIndex = 3;
 
             break;
           }
@@ -2627,8 +2627,8 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, idx);
-          currentState.nextIndex = idx + 3;
+          await sendPropertiesPage(from, results, 0);
+          currentState.nextIndex = 3;
 
           break;
         }
@@ -2674,8 +2674,8 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, idx);
-          currentState.nextIndex = idx + 3;
+          await sendPropertiesPage(from, results, 0);
+          currentState.nextIndex = 3;
 
           break;
         }
@@ -2714,60 +2714,53 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry':
-          {
-            if (input === 'price_retry_main') {
-              // Siempre mostramos el menú PRINCIPAL de rangos
-              currentState.step = 'awaiting_price_range';
-              await sendPriceRangeList(from);
-            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-              delete userStates[numeroRemitente];
-              await sendFarewell(from);
-              break; // ← no menú
-            } else {
-              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
-              await sendMessage(from, {
-                type: 'interactive',
-                interactive: {
-                  type: 'button',
-                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                  action: {
-                    buttons: [
-                      {
-                        type: 'reply',
-                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                      },
-                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                    ],
-                  },
+        case 'awaiting_price_retry': {
+          if (input === 'price_retry_main') {
+            // Siempre mostramos el menú PRINCIPAL de rangos
+            currentState.step = 'awaiting_price_range';
+            await sendPriceRangeList(from);
+          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from);
+            break; // ← no menú
+          } else {
+            // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+            await sendMessage(from, {
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                action: {
+                  buttons: [
+                    {
+                      type: 'reply',
+                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                    },
+                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                  ],
                 },
-              });
-            }
+              },
+            });
+          }
+          break;
+        }
+
+        case 'awaiting_doc_filter': {
+          const m = /^doc_(\d+)$/.exec(input || '');
+          if (!m) {
+            await sendDocumentacionList(from);
             break;
           }
-
-          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
-          currentState.step = 'awaiting_creation_confirmation';
-          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
+          currentState.filters = currentState.filters || {};
+          currentState.filters.documentacion = Number(m[1]); // id real de opción en Podio
           await sendMessage(from, {
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: {
-                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
-              },
-              action: {
-                buttons: [
-                  {
-                    type: 'reply',
-                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
-                  },
-                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
-                ],
-              },
-            },
+            type: 'text',
+            text: { body: '✅ Filtro de documentación aplicado.' },
           });
+          currentState.step = 'filters_menu';
+          await sendFiltersList(from);
           break;
+        }
 
         case 'awaiting_create_lead_confirm': {
           if (input === 'create_lead_yes') {
