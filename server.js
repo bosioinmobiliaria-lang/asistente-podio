@@ -408,7 +408,14 @@ function formatSingleProperty(prop, currentNumber) {
   const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
   if (url) link = url;
 
-  return `*${currentNumber}. ${title}*\n${valor}\n${localidad}\n${link}`;
+  // 👉 CAMBIOS AQUÍ: Añadimos más saltos de línea y una línea divisoria (opcional)
+  return `
+*${currentNumber}. ${title}*
+${valor}
+${localidad}
+🔗 Enlace: ${link}
+----------------------------------
+`.trim(); // El .trim() elimina el salto de línea inicial extra
 }
 
 // --- Utilidades Lead / Podio ---
