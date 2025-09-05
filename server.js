@@ -803,22 +803,6 @@ function buildFiltersHint(filters = {}) {
   return applied.length ? `\nAplicados: ${applied.join(', ')}` : '';
 }
 
-// dentro del for (por cada propiedad)
-const mediaId = await sendPropertyImage(from, prop); // sube a Meta si hace falta y devuelve true si mandó imagen
-await sleep(250); // ⬅️ deja que WhatsApp procese el media
-
-// al mandar la imagen con id, incluí caption
-await sendMessage(from, {
-  type: 'image',
-  image: { id: mediaId, caption: cardText.split('\n')[0] } // ⬅️ título como caption
-});
-
-await sleep(300); // ⬅️ pequeña pausa antes del texto
-await sendMessage(from, { type: 'text', text: { body: cardText } });
-
-await sleep(600); // ⬅️ pausa entre cards
-
-
 // 🚀 NUEVA FUNCIÓN PARA ENVIAR MENSAJES CON META (VERSIÓN COMPATIBLE)
 async function sendMessage(to, messageData) {
   const API_VERSION = 'v19.0';
@@ -848,92 +832,6 @@ async function sendMessage(to, messageData) {
       error.response ? JSON.stringify(error.response.data, null, 2) : error.message,
     );
   }
-}
-
-// 🆕 Devuelve el link público del archivo de Podio
-async function getPodioFileLink(fileId) {
-  try {
-    const token = await getAppAccessTokenFor('propiedades');
-    const { data } = await axios.get(`https://api.podio.com/file/${fileId}`, {
-      headers: { Authorization: `OAuth2 ${token}` },
-      timeout: 15000,
-    });
-
-    // Preferimos SIEMPRE thumbnail_link (directo, content-type image/jpeg)
-    let url = data.thumbnail_link || data.link || data.permalink || null;
-    if (!url) return null;
-
-    // Fuerza https por si viniera http
-    url = url.replace(/^http:/i, 'https:');
-    return url;
-  } catch (e) {
-    console.error('getPodioFileLink error:', e.response?.data || e.message);
-    return null;
-  }
-}
-
-// 🆕 Toma un item (propiedad) y devuelve el link de la PRIMERA foto
-async function getFirstImageLinkFromItem(item) {
-  try {
-    // 1) campo imagen del item
-    const imgField = (item?.fields || []).find(
-      f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0,
-    );
-    const fileObj = imgField?.values?.[0]?.value;
-    if (fileObj?.thumbnail_link || fileObj?.link) {
-      const direct = (fileObj.thumbnail_link || fileObj.link).replace(/^http:/i, 'https:');
-      return direct;
-    }
-    if (fileObj?.file_id) {
-      const link = await getPodioFileLink(fileObj.file_id);
-      if (link) return link;
-    }
-
-    // 2) fallback: archivos adjuntos al item
-    const token = await getAppAccessTokenFor('propiedades');
-    const { data: files } = await axios.get(`https://api.podio.com/item/${item.item_id}/files`, {
-      headers: { Authorization: `OAuth2 ${token}` },
-      timeout: 15000,
-    });
-    const f = (files || [])[0];
-    if (!f) return null;
-
-    const direct = (f.thumbnail_link || f.link || '').replace(/^http:/i, 'https:');
-    return direct || null;
-  } catch (e) {
-    console.error('getFirstImageLinkFromItem error:', e.response?.data || e.message);
-    return null;
-  }
-}
-
-// 🆕 Texto para UNA propiedad (sin numeración, sin separadores)
-function formatSingleProperty(prop, n = null, total = null) {
-  const title = prop.title;
-
-  const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-  const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-  const linkField =
-    prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
-    prop.fields.find(f => f.external_id === 'enlace');
-
-  const valor = valorField
-    ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
-    : 'Valor no especificado';
-
-  const localidadLimpia = localidadField
-    ? (localidadField.values[0].value || '').replace(/<[^>]*>?/gm, '')
-    : 'No especificada';
-  const localidad = `📍 Localidad: *${localidadLimpia}*`;
-
-  // link “limpio”
-  let link = 'Sin enlace web';
-  const raw = linkField?.values?.[0]?.value;
-  const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
-  if (url) link = url;
-
-  const head = n && total ? `*${n}/${total} · ${title}*` : `*${title}*`;
-
-  return `${head}\n${valor}\n${localidad}\n${link}`.trim();
 }
 
 async function sendGasFilterButtons(to) {
@@ -1027,31 +925,6 @@ async function sendOriginList(to) {
       },
     },
   });
-}
-
-function prettyAxiosError(e) {
-  const d = e?.response?.data;
-  if (Buffer.isBuffer(d)) {
-    try {
-      return JSON.parse(d.toString('utf8'));
-    } catch {
-      return d.toString('utf8');
-    }
-  }
-  return d || e.message;
-}
-
-async function downloadPublicFile(url) {
-  const res = await axios.get(url.replace(/^http:/i, 'https:'), {
-    responseType: 'arraybuffer',
-    timeout: 30000,
-    maxRedirects: 5,
-  });
-  return {
-    buffer: Buffer.from(res.data),
-    contentType: res.headers['content-type'] || 'image/jpeg',
-    filename: (url.split('/').pop() || 'image.jpg').split('?')[0],
-  };
 }
 
 // 3.1) Tipo de propiedad (lista de 8)
@@ -1222,46 +1095,11 @@ async function sendHighPriceList(to) {
   });
 }
 
-// ⬇️ 3 por página, cada propiedad en 2 mensajes: imagen + texto
+// 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const total = Array.isArray(properties) ? properties.length : 0;
-  if (!total) {
-    await sendMessage(to, { type: 'text', text: { body: 'No encontré propiedades.' } });
-    return;
-  }
+  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
+  await sendMessage(to, { type: 'text', text: { body: message } });
 
-  if (startIndex === 0) {
-    await sendMessage(to, {
-      type: 'text',
-      text: { body: `🏡 ¡Encontré *${total}* propiedades disponibles!` },
-    });
-    await sleep(300); // 👈 pequeña pausa inicial
-  }
-
-  const page = properties.slice(startIndex, startIndex + 3);
-
-  for (let i = 0; i < page.length; i++) {
-    const prop = page[i];
-    const n = startIndex + i + 1; // número de card (1-based)
-    const caption = `${n}/${total} – ${prop.title}`.slice(0, 75);
-    const cardText = formatSingleProperty(prop, n, total); // título numerado
-
-    // 1) Intentar IMAGEN (media_id) con caption numerado
-    try {
-      const ok = await sendPropertyImage(to, prop, caption);
-      if (ok) await sleep(200); // 👈 dale tiempo a WA para “pintar” la imagen
-    } catch (e) {
-      console.error('sendPropertyImage error:', e?.response?.data || e.message);
-      // si falla, seguimos con el texto igual
-    }
-
-    // 2) TEXTO de la card (también numerado)
-    await sendMessage(to, { type: 'text', text: { body: cardText } });
-
-    await sleep(600); // 👈 pausa entre cards
-  }
-
-  const hasMore = startIndex + 3 < total;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1272,6 +1110,7 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       },
     });
   } else {
+    // Si ya mostramos todo, ofrecer opciones finales
     await sendPostResultsOptions(to);
   }
 }
@@ -1296,105 +1135,6 @@ async function sendDocumentacionList(to) {
     },
   });
 }
-
-// Cache para no re-subir la misma foto mil veces
-const _mediaCache = new Map();
-
-// Baja el binario desde Podio
-async function downloadPodioFile(fileId) {
-  const token = await getAppAccessTokenFor('propiedades');
-  const res = await axios.get(`https://api.podio.com/file/${fileId}/download`, {
-    headers: { Authorization: `OAuth2 ${token}` },
-    responseType: 'arraybuffer',
-    timeout: 30000,
-    maxRedirects: 5,
-  });
-
-  const buf = Buffer.from(res.data);
-  const ct = res.headers['content-type'] || 'application/octet-stream';
-  // intenta sacar nombre del header, si no usa un genérico
-  const cd = res.headers['content-disposition'] || '';
-  const m = /filename="?([^"]+)"?/i.exec(cd);
-  const filename = m ? m[1] : `podio-file-${fileId}.jpg`;
-
-  return { buffer: buf, contentType: ct, filename };
-}
-
-// Sube el binario a WhatsApp y devuelve media_id
-async function uploadToWhatsAppMedia(buffer, contentType, filename) {
-  const API_VERSION = 'v19.0';
-  const url = `https://graph.facebook.com/${API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/media`;
-
-  // Normalizá content-type a algo que WhatsApp soporte bien
-  let ct = (contentType || '').split(';')[0].trim().toLowerCase();
-  if (!/^image\/(jpeg|jpg|png|webp)$/.test(ct)) ct = 'image/jpeg';
-  const safeName = (filename || 'image.jpg').replace(/[^\w.\-]/g, '_');
-
-  const form = new FormData();
-  form.append('messaging_product', 'whatsapp');
-  form.append('file', buffer, { filename: safeName, contentType: ct });
-  form.append('type', ct);
-
-  try {
-    const { data } = await axios.post(url, form, {
-      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`, ...form.getHeaders() },
-      timeout: 30000,
-    });
-    return data.id;
-  } catch (e) {
-    console.error('uploadToWhatsAppMedia error:', prettyAxiosError(e));
-    throw e;
-  }
-}
-
-// Busca el primer file_id de imagen en el item (campo imagen o adjuntos)
-async function getFirstImageFileId(item) {
-  // 1) campo tipo imagen
-  const imgField = (item?.fields || []).find(
-    f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0,
-  );
-  const fid = imgField?.values?.[0]?.value?.file_id;
-  if (fid) return fid;
-
-  // 2) fallback: archivos adjuntos del item (el primero que sea image/*)
-  const token = await getAppAccessTokenFor('propiedades');
-  const { data: files } = await axios.get(`https://api.podio.com/item/${item.item_id}/files`, {
-    headers: { Authorization: `OAuth2 ${token}` },
-    timeout: 15000,
-  });
-
-  const firstImg = (files || []).find(f => (f.mimetype || '').startsWith('image/')) || files?.[0];
-  return firstImg?.file_id || null;
-}
-
-// Envía la imagen del item a WhatsApp subiéndola primero (si no está cacheada)
-async function sendPropertyImage(to, item, caption) {
-  try {
-    const fileId = await getFirstImageFileId(item);
-    if (!fileId) throw new Error('no_file_id');
-
-    let mediaId = _mediaCache.get(fileId);
-    if (!mediaId) {
-      const { buffer, contentType, filename } = await downloadPodioFile(fileId);
-      mediaId = await uploadToWhatsAppMedia(buffer, contentType, filename);
-      _mediaCache.set(fileId, mediaId);
-    }
-    await sendMessage(to, { type: 'image', image: { id: mediaId, caption: caption || '' } });
-    return true;
-  } catch (e) {
-    console.error('sendPropertyImage error:', e?.response?.data || e.message);
-    // 🔁 Fallback por link directo si existe
-    try {
-      const link = await getFirstImageLinkFromItem(item);
-      if (link) {
-        await sendMessage(to, { type: 'image', image: { link, caption: caption || '' } });
-        return true;
-      }
-    } catch (_) {}
-    return false;
-  }
-}
-
 
 async function sendInquietudList(to) {
   await sendMessage(to, {
@@ -2623,7 +2363,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex = (currentState.nextIndex || 0) + 3;
+            currentState.nextIndex += 5;
             break;
           }
 
@@ -2760,9 +2500,8 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'showing_results';
             currentState.results = results;
             currentState.nextIndex = 0;
-            await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex = 3;
-
+            await sendPropertiesPage(from, results, currentState.nextIndex);
+            currentState.nextIndex += 5;
             break;
           }
 
@@ -2814,9 +2553,8 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, 0);
-          currentState.nextIndex = 3;
-
+          await sendPropertiesPage(from, results, currentState.nextIndex);
+          currentState.nextIndex += 5;
           break;
         }
 
@@ -2861,8 +2599,8 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, 0);
-          currentState.nextIndex = 3;
+          await sendPropertiesPage(from, results, currentState.nextIndex);
+          currentState.nextIndex += 5;
 
           break;
         }
@@ -2879,7 +2617,7 @@ app.post('/whatsapp', async (req, res) => {
               break;
             }
             await sendPropertiesPage(from, results, idx);
-            currentState.nextIndex = idx + 3;
+            currentState.nextIndex = idx + 5;
           } else {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
@@ -2901,53 +2639,60 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry': {
-          if (input === 'price_retry_main') {
-            // Siempre mostramos el menú PRINCIPAL de rangos
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
-          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
-            break; // ← no menú
-          } else {
-            // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                    },
-                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                  ],
+        case 'awaiting_price_retry':
+          {
+            if (input === 'price_retry_main') {
+              // Siempre mostramos el menú PRINCIPAL de rangos
+              currentState.step = 'awaiting_price_range';
+              await sendPriceRangeList(from);
+            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+              delete userStates[numeroRemitente];
+              await sendFarewell(from);
+              break; // ← no menú
+            } else {
+              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
                 },
-              },
-            });
-          }
-          break;
-        }
-
-        case 'awaiting_doc_filter': {
-          const m = /^doc_(\d+)$/.exec(input || '');
-          if (!m) {
-            await sendDocumentacionList(from);
+              });
+            }
             break;
           }
-          currentState.filters = currentState.filters || {};
-          currentState.filters.documentacion = Number(m[1]); // id real de opción en Podio
+
+          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
+          currentState.step = 'awaiting_creation_confirmation';
+          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
           await sendMessage(from, {
-            type: 'text',
-            text: { body: '✅ Filtro de documentación aplicado.' },
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: {
+                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
+              },
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                ],
+              },
+            },
           });
-          currentState.step = 'filters_menu';
-          await sendFiltersList(from);
           break;
-        }
 
         case 'awaiting_create_lead_confirm': {
           if (input === 'create_lead_yes') {
