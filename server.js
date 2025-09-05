@@ -2431,20 +2431,24 @@ app.post('/whatsapp', async (req, res) => {
           if (!m) {
             await sendLocalidadList(from);
             break;
-          }
+          } // CAMBIO CLAVE: Usamos el mapa estático y confiable
 
-          await ensureLocalidadMap();
           const locKey = m[1];
-          const locId = LOCALIDAD_MAP_DYNAMIC[locKey];
+          const locId = LOCALIDAD_MAP[locKey]; // Usamos LOCALIDAD_MAP, no el dinámico
+          // Esta validación sigue siendo importante por si se elige una opción inválida
+
           if (!locId) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: 'Opción inválida, por favor elegí de la lista.' },
+            });
             await sendLocalidadList(from);
             break;
           }
 
           currentState.filters = currentState.filters || {};
-          currentState.filters.localidad = locId;
+          currentState.filters.localidad = locId; // Confirmamos y volvemos al menú de filtros (como en la corrección anterior)
 
-          // Confirmamos y volvemos al menú de filtros
           await sendMessage(from, {
             type: 'text',
             text: { body: '✅ Filtro de *localidad* aplicado.' },
