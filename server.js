@@ -842,8 +842,14 @@ async function getPodioFileLink(fileId) {
       headers: { Authorization: `OAuth2 ${token}` },
       timeout: 15000,
     });
-    // Podio suele traer 'link' y 'thumbnail_link' accesibles públicamente
-    return data.link || data.thumbnail_link || null;
+
+    // Preferimos SIEMPRE thumbnail_link (directo, content-type image/jpeg)
+    let url = data.thumbnail_link || data.link || data.permalink || null;
+    if (!url) return null;
+
+    // Fuerza https por si viniera http
+    url = url.replace(/^http:/i, 'https:');
+    return url;
   } catch (e) {
     console.error('getPodioFileLink error:', e.response?.data || e.message);
     return null;
@@ -853,27 +859,31 @@ async function getPodioFileLink(fileId) {
 // 🆕 Toma un item (propiedad) y devuelve el link de la PRIMERA foto
 async function getFirstImageLinkFromItem(item) {
   try {
-    // 1) Buscar cualquier campo tipo imagen con valores
-    const field = (item?.fields || []).find(
+    // 1) campo imagen del item
+    const imgField = (item?.fields || []).find(
       f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0,
     );
+    const fileObj = imgField?.values?.[0]?.value;
+    if (fileObj?.thumbnail_link || fileObj?.link) {
+      const direct = (fileObj.thumbnail_link || fileObj.link).replace(/^http:/i, 'https:');
+      return direct;
+    }
+    if (fileObj?.file_id) {
+      const link = await getPodioFileLink(fileObj.file_id);
+      if (link) return link;
+    }
 
-    const fileObj = field?.values?.[0]?.value;
-    if (fileObj?.link) return fileObj.link; // ya viene el link público
-    if (fileObj?.file_id) return await getPodioFileLink(fileObj.file_id); // resolvemos el link
-
-    // 2) Fallback: consultar archivos adjuntos del item
+    // 2) fallback: archivos adjuntos al item
     const token = await getAppAccessTokenFor('propiedades');
     const { data: files } = await axios.get(`https://api.podio.com/item/${item.item_id}/files`, {
       headers: { Authorization: `OAuth2 ${token}` },
       timeout: 15000,
     });
+    const f = (files || [])[0];
+    if (!f) return null;
 
-    const first = (files || [])[0];
-    if (first?.link) return first.link;
-    if (first?.thumbnail_link) return first.thumbnail_link;
-
-    return null;
+    const direct = (f.thumbnail_link || f.link || '').replace(/^http:/i, 'https:');
+    return direct || null;
   } catch (e) {
     console.error('getFirstImageLinkFromItem error:', e.response?.data || e.message);
     return null;
@@ -1176,7 +1186,6 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     return;
   }
 
-  // 👉 Cabecera solo la primera vez
   if (startIndex === 0) {
     await sendMessage(to, {
       type: 'text',
@@ -1187,8 +1196,20 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
   const page = properties.slice(startIndex, startIndex + 3);
 
   for (const prop of page) {
-    await sendPropertyImage(to, prop); // ← sube a WhatsApp y envía por id
+    const imgLink = await getFirstImageLinkFromItem(prop);
     const cardText = formatSingleProperty(prop);
+
+    if (imgLink) {
+      try {
+        await sendMessage(to, {
+          type: 'image',
+          image: { link: imgLink, caption: cardText.split('\n')[0] }, // título como caption
+        });
+      } catch (err) {
+        console.error('❌ Error al enviar imagen:', err.response?.data || err.message);
+        // seguimos con el texto igual
+      }
+    }
     await sendMessage(to, { type: 'text', text: { body: cardText } });
   }
 
