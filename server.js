@@ -1848,6 +1848,8 @@ app.get('/', (_req, res) =>
 // ----------------------------------------
 // Webhook para WhatsApp (LÓGICA CONVERSACIONAL Y RÁPIDA v11.0)
 // ----------------------------------------
+const twilio = require('twilio');
+const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const userStates = {}; // "Memoria" del bot
 
@@ -2637,102 +2639,60 @@ app.post('/whatsapp', async (req, res) => {
           break;
         }
 
-        case 'awaiting_price_retry': {
-          if (input === 'price_retry_main') {
-            currentState.step = 'awaiting_price_range';
-            await sendPriceRangeList(from);
-          } else if (input === 'price_retry_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
-          } else {
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                    },
-                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                  ],
+        case 'awaiting_price_retry':
+          {
+            if (input === 'price_retry_main') {
+              // Siempre mostramos el menú PRINCIPAL de rangos
+              currentState.step = 'awaiting_price_range';
+              await sendPriceRangeList(from);
+            } else if (input === 'price_retry_cancel' || low === 'cancelar') {
+              delete userStates[numeroRemitente];
+              await sendFarewell(from);
+              break; // ← no menú
+            } else {
+              // Si escriben otra cosa, mantenemos el loop y re-enviamos los botones
+              await sendMessage(from, {
+                type: 'interactive',
+                interactive: {
+                  type: 'button',
+                  body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
+                  action: {
+                    buttons: [
+                      {
+                        type: 'reply',
+                        reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
+                      },
+                      { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
+                    ],
+                  },
                 },
-              },
-            });
-          }
-          break;
-        }
-
-        case 'awaiting_doc_filter': {
-          const m = /^doc_(\d+)$/.exec(input || '');
-          if (!m) {
-            await sendDocumentacionList(from);
+              });
+            }
             break;
           }
-          const optionId = Number(m[1]); // id real de Podio
-          currentState.filters = currentState.filters || {};
-          currentState.filters.documentacion = optionId;
 
+          // Tampoco hay Contacto → ofrecer crear Contacto (flujo existente)
+          currentState.step = 'awaiting_creation_confirmation';
+          currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
           await sendMessage(from, {
-            type: 'text',
-            text: { body: '✅ Filtro de documentación aplicado.' },
-          });
-          currentState.step = 'filters_menu';
-          await sendFiltersList(from);
-          break;
-        }
-
-        case 'after_update_options': {
-          if (input === 'after_back_menu') {
-            delete userStates[numeroRemitente];
-            await sendMainMenu(from);
-          } else if (input === 'after_done' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
-          } else {
-            await sendAfterUpdateOptions(from);
-          }
-          break;
-        }
-
-        case 'check_contact_choices': {
-          if (input === 'check_create_contact_yes') {
-            const digits = currentState.tempPhoneDigits;
-            currentState.step = 'awaiting_name_only';
-            currentState.data = {
-              title: 'Contacto sin nombre',
-              phone: [{ type: 'mobile', value: digits }],
-              'telefono-busqueda': digits,
-            };
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '✍️ Decime *Nombre y Apellido*.' },
-            });
-          } else if (input === 'check_cancel' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
-          } else {
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '¿Deseás cargarlo como *nuevo contacto*?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'check_create_contact_yes', title: '🧾 Crear contacto' },
-                    },
-                    { type: 'reply', reply: { id: 'check_cancel', title: '❌ Cancelar' } },
-                  ],
-                },
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: {
+                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
               },
-            });
-          }
+              action: {
+                buttons: [
+                  {
+                    type: 'reply',
+                    reply: { id: 'confirm_create_yes', title: '✅ Crear Contacto' },
+                  },
+                  { type: 'reply', reply: { id: 'confirm_create_no', title: '❌ Cancelar' } },
+                ],
+              },
+            },
+          });
           break;
-        }
 
         case 'awaiting_create_lead_confirm': {
           if (input === 'create_lead_yes') {
