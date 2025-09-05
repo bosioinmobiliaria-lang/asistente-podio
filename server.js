@@ -834,6 +834,71 @@ async function sendMessage(to, messageData) {
   }
 }
 
+// 🆕 Devuelve el link público del archivo de Podio
+async function getPodioFileLink(fileId) {
+  try {
+    const token = await getAppAccessTokenFor('propiedades');
+    const { data } = await axios.get(`https://api.podio.com/file/${fileId}`, {
+      headers: { Authorization: `OAuth2 ${token}` },
+      timeout: 15000,
+    });
+    // Podio suele traer 'link' y 'thumbnail_link' accesibles públicamente
+    return data.link || data.thumbnail_link || null;
+  } catch (e) {
+    console.error('getPodioFileLink error:', e.response?.data || e.message);
+    return null;
+  }
+}
+
+// 🆕 Toma un item (propiedad) y devuelve el link de la PRIMERA foto
+async function getFirstImageLinkFromItem(item) {
+  try {
+    const imgField = (item?.fields || []).find(f => f.external_id === 'image');
+    const fileObj = imgField?.values?.[0]?.value;
+    if (!fileObj) return null;
+
+    // Si ya viene el link directo en el value, úsalo
+    if (fileObj.link) return fileObj.link;
+
+    // Si solo viene el file_id, lo resolvemos
+    if (fileObj.file_id) return await getPodioFileLink(fileObj.file_id);
+
+    return null;
+  } catch (e) {
+    console.error('getFirstImageLinkFromItem error:', e.message);
+    return null;
+  }
+}
+
+// 🆕 Texto para UNA propiedad (sin numeración, sin separadores)
+function formatSingleProperty(prop) {
+  const title = prop.title;
+
+  const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+  const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+
+  const linkField =
+    prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
+    prop.fields.find(f => f.external_id === 'enlace'); // fallback
+
+  const valor = valorField
+    ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
+    : 'Valor no especificado';
+
+  const localidadLimpia = localidadField
+    ? (localidadField.values[0].value || '').replace(/<[^>]*>?/gm, '')
+    : 'No especificada';
+  const localidad = `📍 Localidad: *${localidadLimpia}*`;
+
+  let link = 'Sin enlace web';
+  const raw = linkField?.values?.[0]?.value;
+  const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
+  if (url) link = url;
+
+  return `*${title}*\n${valor}\n${localidad}\n${link}`.trim();
+}
+
+
 async function sendGasFilterButtons(to) {
   await sendMessage(to, {
     type: 'interactive',
@@ -1095,11 +1160,20 @@ async function sendHighPriceList(to) {
   });
 }
 
-// 3.6) Paginado de resultados (5 por página) + botón "Ver más"
+// ⬇️ 3 por página, cada propiedad en 2 mensajes: imagen (si hay) + texto
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
-  await sendMessage(to, { type: 'text', text: { body: message } });
+  const page = properties.slice(startIndex, startIndex + 3);
 
+  for (const prop of page) {
+    const imgLink = await getFirstImageLinkFromItem(prop);
+    if (imgLink) {
+      await sendMessage(to, { type: 'image', image: { link: imgLink } });
+    }
+    const cardText = formatSingleProperty(prop);
+    await sendMessage(to, { type: 'text', text: { body: cardText } });
+  }
+
+  const hasMore = startIndex + 3 < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1110,7 +1184,6 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       },
     });
   } else {
-    // Si ya mostramos todo, ofrecer opciones finales
     await sendPostResultsOptions(to);
   }
 }
@@ -2363,7 +2436,7 @@ app.post('/whatsapp', async (req, res) => {
             currentState.results = results;
             currentState.nextIndex = 0;
             await sendPropertiesPage(from, results, 0);
-            currentState.nextIndex += 5;
+            currentState.nextIndex += 3;
             break;
           }
 
@@ -2500,8 +2573,9 @@ app.post('/whatsapp', async (req, res) => {
             currentState.step = 'showing_results';
             currentState.results = results;
             currentState.nextIndex = 0;
-            await sendPropertiesPage(from, results, currentState.nextIndex);
-            currentState.nextIndex += 5;
+            await sendPropertiesPage(from, results, idx);
+            currentState.nextIndex = idx + 3;
+
             break;
           }
 
@@ -2553,8 +2627,9 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex += 5;
+          await sendPropertiesPage(from, results, idx);
+          currentState.nextIndex = idx + 3;
+
           break;
         }
 
@@ -2599,8 +2674,8 @@ app.post('/whatsapp', async (req, res) => {
           currentState.step = 'showing_results';
           currentState.results = results;
           currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex += 5;
+          await sendPropertiesPage(from, results, idx);
+          currentState.nextIndex = idx + 3;
 
           break;
         }
@@ -2617,7 +2692,7 @@ app.post('/whatsapp', async (req, res) => {
               break;
             }
             await sendPropertiesPage(from, results, idx);
-            currentState.nextIndex = idx + 5;
+            currentState.nextIndex = idx + 3;
           } else {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
