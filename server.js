@@ -1363,46 +1363,49 @@ async function sendPropertyImage(to, item) {
     const fileId = await getFirstImageFileId(item);
     if (!fileId) return false;
 
-    // cache por fileId
+    // cache
     if (_mediaCache.has(fileId)) {
       const mediaId = _mediaCache.get(fileId);
       await sendMessage(to, { type: 'image', image: { id: mediaId } });
       return true;
     }
 
-    // 1) Intentá descargar el archivo real desde Podio
-    let { buffer, contentType, filename } = await downloadPodioFile(fileId);
-    let ct = (contentType || '').split(';')[0].trim().toLowerCase();
-    const sizeMB = buffer.length / (1024 * 1024);
-
-    // 2) Si NO es un tipo soportado por WhatsApp o pesa demasiado,
-    //    bajamos el thumbnail JPEG público de Podio y usamos ese.
-    const supported = new Set(['image/jpeg', 'image/png', 'image/webp']);
-    const TOO_BIG_MB = 15; // margen seguro para Cloud API
-    if (!supported.has(ct) || sizeMB > TOO_BIG_MB) {
-      const pubLink = await getPodioFileLink(fileId); // suele devolver jpeg
-      if (pubLink) {
-        const alt = await downloadPublicFile(pubLink);
-        buffer = alt.buffer;
-        ct = 'image/jpeg'; // thumbnails de Podio salen en JPEG
-        filename = (filename || `podio-${fileId}.jpg`).replace(/\.[^.]+$/, '.jpg');
-      }
+    // A) PUBLIC LINK FIRST (evita 404 por permisos de /download)
+    const pubLink = await getPodioFileLink(fileId); // suele devolver thumbnail_link (jpeg)
+    if (pubLink) {
+      const { buffer, contentType, filename } = await downloadPublicFile(pubLink);
+      const mediaId = await uploadToWhatsAppMedia(
+        buffer,
+        contentType || 'image/jpeg',
+        filename || `podio-${fileId}.jpg`,
+      );
+      _mediaCache.set(fileId, mediaId);
+      await sendMessage(to, { type: 'image', image: { id: mediaId } });
+      return true;
     }
 
-    // 3) Subir a WhatsApp /media y mandar por media_id
-    const mediaId = await uploadToWhatsAppMedia(
-      buffer,
-      ct || 'image/jpeg',
-      filename || `podio-${fileId}.jpg`,
-    );
-    _mediaCache.set(fileId, mediaId);
-    await sendMessage(to, { type: 'image', image: { id: mediaId } });
-    return true;
+    // B) Fallback: intentá API /download (si tu token tiene permiso)
+    try {
+      const { buffer, contentType, filename } = await downloadPodioFile(fileId);
+      const mediaId = await uploadToWhatsAppMedia(
+        buffer,
+        contentType || 'image/jpeg',
+        filename || `podio-${fileId}.jpg`,
+      );
+      _mediaCache.set(fileId, mediaId);
+      await sendMessage(to, { type: 'image', image: { id: mediaId } });
+      return true;
+    } catch (e) {
+      console.error('downloadPodioFile fallback error:', prettyAxiosError(e));
+    }
+
+    return false; // deja que el caller mande link como último recurso
   } catch (e) {
     console.error('sendPropertyImage error:', prettyAxiosError(e));
-    return false; // deja que el caller haga fallback por link
+    return false;
   }
 }
+
 
 async function sendInquietudList(to) {
   await sendMessage(to, {
