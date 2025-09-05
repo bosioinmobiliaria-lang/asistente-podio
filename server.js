@@ -803,8 +803,6 @@ function buildFiltersHint(filters = {}) {
   return applied.length ? `\nAplicados: ${applied.join(', ')}` : '';
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 // dentro del for (por cada propiedad)
 const mediaId = await sendPropertyImage(from, prop); // sube a Meta si hace falta y devuelve true si mandó imagen
 await sleep(250); // ⬅️ deja que WhatsApp procese el media
@@ -1237,31 +1235,30 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       type: 'text',
       text: { body: `🏡 ¡Encontré *${total}* propiedades disponibles!` },
     });
-    // Pequeña pausa para no saturar el cliente
-    await new Promise(r => setTimeout(r, 200));
+    await sleep(300); // 👈 pequeña pausa inicial
   }
 
   const page = properties.slice(startIndex, startIndex + 3);
 
   for (let i = 0; i < page.length; i++) {
     const prop = page[i];
-    const n = startIndex + i + 1; // ← número de card (1-based)
-    const caption = `${n}/${total} – ${prop.title}`.slice(0, 75); // caption corto
+    const n = startIndex + i + 1; // número de card (1-based)
+    const caption = `${n}/${total} – ${prop.title}`.slice(0, 75);
     const cardText = formatSingleProperty(prop, n, total); // título numerado
 
-    // 1) Intentá imagen (subiendo a WA y usando media_id) con caption numerado
+    // 1) Intentar IMAGEN (media_id) con caption numerado
     try {
-      await sendPropertyImage(to, prop, caption); // ← ahora acepta caption
+      const ok = await sendPropertyImage(to, prop, caption);
+      if (ok) await sleep(200); // 👈 dale tiempo a WA para “pintar” la imagen
     } catch (e) {
       console.error('sendPropertyImage error:', e?.response?.data || e.message);
       // si falla, seguimos con el texto igual
     }
 
-    // 2) Texto de la card (también numerado)
+    // 2) TEXTO de la card (también numerado)
     await sendMessage(to, { type: 'text', text: { body: cardText } });
 
-    // Pausa cortita entre cards para mejorar la entrega
-    await new Promise(r => setTimeout(r, 250));
+    await sleep(600); // 👈 pausa entre cards
   }
 
   const hasMore = startIndex + 3 < total;
@@ -1374,22 +1371,26 @@ async function getFirstImageFileId(item) {
 async function sendPropertyImage(to, item, caption) {
   try {
     const fileId = await getFirstImageFileId(item);
-    if (!fileId) return false;
+    if (!fileId) throw new Error('no_file_id');
 
-    if (_mediaCache.has(fileId)) {
-      const mediaId = _mediaCache.get(fileId);
-      await sendMessage(to, { type: 'image', image: { id: mediaId, caption: caption || '' } });
-      return true;
+    let mediaId = _mediaCache.get(fileId);
+    if (!mediaId) {
+      const { buffer, contentType, filename } = await downloadPodioFile(fileId);
+      mediaId = await uploadToWhatsAppMedia(buffer, contentType, filename);
+      _mediaCache.set(fileId, mediaId);
     }
-
-    const { buffer, contentType, filename } = await downloadPodioFile(fileId);
-    const mediaId = await uploadToWhatsAppMedia(buffer, contentType, filename);
-    _mediaCache.set(fileId, mediaId);
-
     await sendMessage(to, { type: 'image', image: { id: mediaId, caption: caption || '' } });
     return true;
   } catch (e) {
     console.error('sendPropertyImage error:', e?.response?.data || e.message);
+    // 🔁 Fallback por link directo si existe
+    try {
+      const link = await getFirstImageLinkFromItem(item);
+      if (link) {
+        await sendMessage(to, { type: 'image', image: { link, caption: caption || '' } });
+        return true;
+      }
+    } catch (_) {}
     return false;
   }
 }
