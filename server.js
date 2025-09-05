@@ -1196,20 +1196,33 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
   const page = properties.slice(startIndex, startIndex + 3);
 
   for (const prop of page) {
-    const imgLink = await getFirstImageLinkFromItem(prop);
     const cardText = formatSingleProperty(prop);
 
-    if (imgLink) {
+    // 1) Preferir subir el binario a WhatsApp y mandar por media_id (estable)
+    let sent = false;
+    try {
+      sent = await sendPropertyImage(to, prop); // usa /media + cache
+    } catch (e) {
+      console.error('sendPropertyImage error:', e.response?.data || e.message);
+    }
+
+    // 2) Fallback: si no se pudo subir, intentá con un link público (si existe)
+    if (!sent) {
       try {
-        await sendMessage(to, {
-          type: 'image',
-          image: { link: imgLink, caption: cardText.split('\n')[0] }, // título como caption
-        });
+        const imgLink = await getFirstImageLinkFromItem(prop);
+        if (imgLink) {
+          await sendMessage(to, {
+            type: 'image',
+            image: { link: imgLink, caption: cardText.split('\n')[0] }, // título como caption
+          });
+          sent = true;
+        }
       } catch (err) {
-        console.error('❌ Error al enviar imagen:', err.response?.data || err.message);
-        // seguimos con el texto igual
+        console.error('❌ Fallback por link también falló:', err.response?.data || err.message);
       }
     }
+
+    // 3) Enviar la tarjeta de texto (siempre)
     await sendMessage(to, { type: 'text', text: { body: cardText } });
   }
 
