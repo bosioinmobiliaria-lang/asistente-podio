@@ -853,19 +853,29 @@ async function getPodioFileLink(fileId) {
 // 🆕 Toma un item (propiedad) y devuelve el link de la PRIMERA foto
 async function getFirstImageLinkFromItem(item) {
   try {
-    const imgField = (item?.fields || []).find(f => f.external_id === 'image');
-    const fileObj = imgField?.values?.[0]?.value;
-    if (!fileObj) return null;
+    // 1) Buscar cualquier campo tipo imagen con valores
+    const field = (item?.fields || []).find(
+      f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0,
+    );
 
-    // Si ya viene el link directo en el value, úsalo
-    if (fileObj.link) return fileObj.link;
+    const fileObj = field?.values?.[0]?.value;
+    if (fileObj?.link) return fileObj.link; // ya viene el link público
+    if (fileObj?.file_id) return await getPodioFileLink(fileObj.file_id); // resolvemos el link
 
-    // Si solo viene el file_id, lo resolvemos
-    if (fileObj.file_id) return await getPodioFileLink(fileObj.file_id);
+    // 2) Fallback: consultar archivos adjuntos del item
+    const token = await getAppAccessTokenFor('propiedades');
+    const { data: files } = await axios.get(`https://api.podio.com/item/${item.item_id}/files`, {
+      headers: { Authorization: `OAuth2 ${token}` },
+      timeout: 15000,
+    });
+
+    const first = (files || [])[0];
+    if (first?.link) return first.link;
+    if (first?.thumbnail_link) return first.thumbnail_link;
 
     return null;
   } catch (e) {
-    console.error('getFirstImageLinkFromItem error:', e.message);
+    console.error('getFirstImageLinkFromItem error:', e.response?.data || e.message);
     return null;
   }
 }
@@ -897,7 +907,6 @@ function formatSingleProperty(prop) {
 
   return `*${title}*\n${valor}\n${localidad}\n${link}`.trim();
 }
-
 
 async function sendGasFilterButtons(to) {
   await sendMessage(to, {
@@ -1160,8 +1169,21 @@ async function sendHighPriceList(to) {
   });
 }
 
-// ⬇️ 3 por página, cada propiedad en 2 mensajes: imagen (si hay) + texto
+// ⬇️ 3 por página, cada propiedad en 2 mensajes: imagen + texto
 async function sendPropertiesPage(to, properties, startIndex = 0) {
+  if (!Array.isArray(properties) || properties.length === 0) {
+    await sendMessage(to, { type: 'text', text: { body: 'No encontré propiedades.' } });
+    return;
+  }
+
+  // 👉 Cabecera solo la primera vez
+  if (startIndex === 0) {
+    await sendMessage(to, {
+      type: 'text',
+      text: { body: `🏡 ¡Encontré *${properties.length}* propiedades disponibles!` },
+    });
+  }
+
   const page = properties.slice(startIndex, startIndex + 3);
 
   for (const prop of page) {
