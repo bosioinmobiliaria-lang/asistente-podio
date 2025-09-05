@@ -803,6 +803,24 @@ function buildFiltersHint(filters = {}) {
   return applied.length ? `\nAplicados: ${applied.join(', ')}` : '';
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// dentro del for (por cada propiedad)
+const mediaId = await sendPropertyImage(from, prop); // sube a Meta si hace falta y devuelve true si mandó imagen
+await sleep(250); // ⬅️ deja que WhatsApp procese el media
+
+// al mandar la imagen con id, incluí caption
+await sendMessage(from, {
+  type: 'image',
+  image: { id: mediaId, caption: cardText.split('\n')[0] } // ⬅️ título como caption
+});
+
+await sleep(300); // ⬅️ pequeña pausa antes del texto
+await sendMessage(from, { type: 'text', text: { body: cardText } });
+
+await sleep(600); // ⬅️ pausa entre cards
+
+
 // 🚀 NUEVA FUNCIÓN PARA ENVIAR MENSAJES CON META (VERSIÓN COMPATIBLE)
 async function sendMessage(to, messageData) {
   const API_VERSION = 'v19.0';
