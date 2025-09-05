@@ -1095,10 +1095,31 @@ async function sendHighPriceList(to) {
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
   const batchSize = 5;
-  const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado
+  const batch = properties.slice(startIndex, startIndex + batchSize);
 
+  // Enviamos cada propiedad de la tanda en un mensaje separado
   for (let i = 0; i < batch.length; i++) {
     const prop = batch[i];
+
+    // 👉 NUEVO: Intentar obtener la URL de la imagen
+    const photosField = prop.fields.find(f => f.external_id === 'image');
+    const imageUrl =
+      photosField && photosField.values.length > 0
+        ? photosField.values[0].value.link // Asegúrate de que esta ruta sea correcta para tu estructura de Podio
+        : null;
+
+    // Si hay una imagen, enviarla primero
+    if (imageUrl) {
+      await sendMessage(to, {
+        type: 'image',
+        image: {
+          link: imageUrl,
+          caption: `*${prop.title}*`, // Título como caption, opcional
+        },
+      });
+    }
+
+    // Luego, enviar el texto formateado de la propiedad
     const message = formatSingleProperty(prop, startIndex + i + 1);
     await sendMessage(to, { type: 'text', text: { body: message } });
   }
