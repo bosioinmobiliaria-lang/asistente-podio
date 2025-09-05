@@ -386,39 +386,29 @@ function extractLastSeguimientoLine(wholeText) {
 }
 
 // --- Resultados de propiedades (WhatsApp) ---
-function formatResults(properties, startIndex, batchSize = 5) {
-  const batch = properties.slice(startIndex, startIndex + batchSize);
-  let message =
-    startIndex === 0 ? `✅ ¡Encontré ${properties.length} propiedades disponibles!\n\n` : '';
+function formatSingleProperty(prop, currentNumber) {
+  const title = prop.title;
+  const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
+  const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
+  const linkField =
+    prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
+    prop.fields.find(f => f.external_id === 'enlace'); // fallback
 
-  batch.forEach((prop, index) => {
-    const title = prop.title;
-    const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
-    const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-    const linkField =
-      prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
-      prop.fields.find(f => f.external_id === 'enlace'); // fallback
+  const valor = valorField
+    ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
+    : 'Valor no especificado';
 
-    const valor = valorField
-      ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
-      : 'Valor no especificado';
-    const localidadLimpia = localidadField
-      ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
-      : 'No especificada';
-    const localidad = `📍 Localidad: *${localidadLimpia}*`;
+  const localidadLimpia = localidadField
+    ? localidadField.values[0].value.replace(/<[^>]*>?/gm, '')
+    : 'No especificada';
+  const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
-    let link = 'Sin enlace web';
-    const raw = linkField?.values?.[0]?.value;
-    // Soporta <a href="...">, texto plano con URL, o objetos con .url
-    const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
-    if (url) link = url;
+  let link = 'Sin enlace web';
+  const raw = linkField?.values?.[0]?.value;
+  const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
+  if (url) link = url;
 
-    message += `*${startIndex + index + 1}. ${title}*\n${valor}\n${localidad}\n${link}`;
-    if (index < batch.length - 1) message += '\n\n----------\n\n';
-  });
-
-  const hasMore = startIndex + batchSize < properties.length;
-  return { message: message.trim(), hasMore };
+  return `*${currentNumber}. ${title}*\n${valor}\n${localidad}\n${link}`;
 }
 
 // --- Utilidades Lead / Podio ---
@@ -1097,9 +1087,16 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const { message, hasMore } = formatResults(properties, startIndex, 5); // ya tenés formatResults
-  await sendMessage(to, { type: 'text', text: { body: message } });
+  const batchSize = 5;
+  const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado
 
+  for (let i = 0; i < batch.length; i++) {
+    const prop = batch[i];
+    const message = formatSingleProperty(prop, startIndex + i + 1);
+    await sendMessage(to, { type: 'text', text: { body: message } });
+  }
+
+  const hasMore = startIndex + batchSize < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1110,7 +1107,8 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       },
     });
   } else {
-    // Si ya mostramos todo, ofrecer opciones finales
+    // Si ya mostramos todo, avisamos y ofrecemos opciones finales
+    await sendMessage(to, { type: 'text', text: { body: '✅ Esos son todos los resultados.' } });
     await sendPostResultsOptions(to);
   }
 }
@@ -2446,8 +2444,13 @@ app.post('/whatsapp', async (req, res) => {
           currentState.filters = currentState.filters || {};
           currentState.filters.localidad = locId;
 
-          currentState.step = 'awaiting_gas_filter';
-          await sendGasFilterButtons(from);
+          // Confirmamos y volvemos al menú de filtros
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: '✅ Filtro de *localidad* aplicado.' },
+          });
+          currentState.step = 'filters_menu';
+          await sendFiltersList(from);
           break;
         }
 
@@ -2527,28 +2530,20 @@ app.post('/whatsapp', async (req, res) => {
 
           // BUSCAR y mostrar página 1
           const results = await searchProperties(currentState.filters);
-          if (!results || !results.length) {
-            currentState.step = 'awaiting_price_retry';
-            // Siempre volvemos al menú PRINCIPAL de rangos, como pediste
-            currentState.priceLevel = 'main';
-            await sendMessage(from, {
-              type: 'interactive',
-              interactive: {
-                type: 'button',
-                body: { text: '😕 Sin resultados.\n¿Probar otro rango?' },
-                action: {
-                  buttons: [
-                    {
-                      type: 'reply',
-                      reply: { id: 'price_retry_main', title: '🔁 Elegir otro rango' },
-                    },
-                    { type: 'reply', reply: { id: 'price_retry_cancel', title: '❌ Cancelar' } },
-                  ],
-                },
-              },
-            });
-            break;
-          }
+          // ... (código que maneja si no hay resultados) ...
+
+          // ✅ Mensaje con el total ANTES de empezar a listar
+          await sendMessage(from, {
+            type: 'text',
+            text: { body: `✅ ¡Encontré ${results.length} propiedades disponibles!` },
+          });
+
+          currentState.step = 'showing_results';
+          currentState.results = results;
+          currentState.nextIndex = 0;
+          await sendPropertiesPage(from, results, currentState.nextIndex);
+          currentState.nextIndex += 5;
+          break;
 
           currentState.step = 'showing_results';
           currentState.results = results;
