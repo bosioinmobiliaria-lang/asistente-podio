@@ -909,15 +909,14 @@ async function getFirstImageLinkFromItem(item) {
 }
 
 // 🆕 Texto para UNA propiedad (sin numeración, sin separadores)
-function formatSingleProperty(prop) {
+function formatSingleProperty(prop, n = null, total = null) {
   const title = prop.title;
 
   const valorField = prop.fields.find(f => f.external_id === 'valor-de-la-propiedad');
   const localidadField = prop.fields.find(f => f.external_id === 'localidad-texto-2');
-
   const linkField =
     prop.fields.find(f => f.external_id === 'enlace-texto-2') ||
-    prop.fields.find(f => f.external_id === 'enlace'); // fallback
+    prop.fields.find(f => f.external_id === 'enlace');
 
   const valor = valorField
     ? `💰 Valor: *u$s ${parseInt(valorField.values[0].value).toLocaleString('es-AR')}*`
@@ -928,12 +927,15 @@ function formatSingleProperty(prop) {
     : 'No especificada';
   const localidad = `📍 Localidad: *${localidadLimpia}*`;
 
+  // link “limpio”
   let link = 'Sin enlace web';
   const raw = linkField?.values?.[0]?.value;
   const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
   if (url) link = url;
 
-  return `*${title}*\n${valor}\n${localidad}\n${link}`.trim();
+  const head = n && total ? `*${n}/${total} · ${title}*` : `*${title}*`;
+
+  return `${head}\n${valor}\n${localidad}\n${link}`.trim();
 }
 
 async function sendGasFilterButtons(to) {
@@ -1224,7 +1226,8 @@ async function sendHighPriceList(to) {
 
 // ⬇️ 3 por página, cada propiedad en 2 mensajes: imagen + texto
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  if (!Array.isArray(properties) || properties.length === 0) {
+  const total = Array.isArray(properties) ? properties.length : 0;
+  if (!total) {
     await sendMessage(to, { type: 'text', text: { body: 'No encontré propiedades.' } });
     return;
   }
@@ -1232,44 +1235,36 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
   if (startIndex === 0) {
     await sendMessage(to, {
       type: 'text',
-      text: { body: `🏡 ¡Encontré *${properties.length}* propiedades disponibles!` },
+      text: { body: `🏡 ¡Encontré *${total}* propiedades disponibles!` },
     });
+    // Pequeña pausa para no saturar el cliente
+    await new Promise(r => setTimeout(r, 200));
   }
 
   const page = properties.slice(startIndex, startIndex + 3);
 
-  for (const prop of page) {
-    const cardText = formatSingleProperty(prop);
+  for (let i = 0; i < page.length; i++) {
+    const prop = page[i];
+    const n = startIndex + i + 1; // ← número de card (1-based)
+    const caption = `${n}/${total} – ${prop.title}`.slice(0, 75); // caption corto
+    const cardText = formatSingleProperty(prop, n, total); // título numerado
 
-    // 1) Preferir subir el binario a WhatsApp y mandar por media_id (estable)
-    let sent = false;
+    // 1) Intentá imagen (subiendo a WA y usando media_id) con caption numerado
     try {
-      sent = await sendPropertyImage(to, prop); // usa /media + cache
+      await sendPropertyImage(to, prop, caption); // ← ahora acepta caption
     } catch (e) {
-      console.error('sendPropertyImage error:', e.response?.data || e.message);
+      console.error('sendPropertyImage error:', e?.response?.data || e.message);
+      // si falla, seguimos con el texto igual
     }
 
-    // 2) Fallback: si no se pudo subir, intentá con un link público (si existe)
-    if (!sent) {
-      try {
-        const imgLink = await getFirstImageLinkFromItem(prop);
-        if (imgLink) {
-          await sendMessage(to, {
-            type: 'image',
-            image: { link: imgLink, caption: cardText.split('\n')[0] }, // título como caption
-          });
-          sent = true;
-        }
-      } catch (err) {
-        console.error('❌ Fallback por link también falló:', err.response?.data || err.message);
-      }
-    }
-
-    // 3) Enviar la tarjeta de texto (siempre)
+    // 2) Texto de la card (también numerado)
     await sendMessage(to, { type: 'text', text: { body: cardText } });
+
+    // Pausa cortita entre cards para mejorar la entrega
+    await new Promise(r => setTimeout(r, 250));
   }
 
-  const hasMore = startIndex + 3 < properties.length;
+  const hasMore = startIndex + 3 < total;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1376,50 +1371,25 @@ async function getFirstImageFileId(item) {
 }
 
 // Envía la imagen del item a WhatsApp subiéndola primero (si no está cacheada)
-async function sendPropertyImage(to, item) {
+async function sendPropertyImage(to, item, caption) {
   try {
     const fileId = await getFirstImageFileId(item);
     if (!fileId) return false;
 
-    // cache
     if (_mediaCache.has(fileId)) {
       const mediaId = _mediaCache.get(fileId);
-      await sendMessage(to, { type: 'image', image: { id: mediaId } });
+      await sendMessage(to, { type: 'image', image: { id: mediaId, caption: caption || '' } });
       return true;
     }
 
-    // A) PUBLIC LINK FIRST (evita 404 por permisos de /download)
-    const pubLink = await getPodioFileLink(fileId); // suele devolver thumbnail_link (jpeg)
-    if (pubLink) {
-      const { buffer, contentType, filename } = await downloadPublicFile(pubLink);
-      const mediaId = await uploadToWhatsAppMedia(
-        buffer,
-        contentType || 'image/jpeg',
-        filename || `podio-${fileId}.jpg`,
-      );
-      _mediaCache.set(fileId, mediaId);
-      await sendMessage(to, { type: 'image', image: { id: mediaId } });
-      return true;
-    }
+    const { buffer, contentType, filename } = await downloadPodioFile(fileId);
+    const mediaId = await uploadToWhatsAppMedia(buffer, contentType, filename);
+    _mediaCache.set(fileId, mediaId);
 
-    // B) Fallback: intentá API /download (si tu token tiene permiso)
-    try {
-      const { buffer, contentType, filename } = await downloadPodioFile(fileId);
-      const mediaId = await uploadToWhatsAppMedia(
-        buffer,
-        contentType || 'image/jpeg',
-        filename || `podio-${fileId}.jpg`,
-      );
-      _mediaCache.set(fileId, mediaId);
-      await sendMessage(to, { type: 'image', image: { id: mediaId } });
-      return true;
-    } catch (e) {
-      console.error('downloadPodioFile fallback error:', prettyAxiosError(e));
-    }
-
-    return false; // deja que el caller mande link como último recurso
+    await sendMessage(to, { type: 'image', image: { id: mediaId, caption: caption || '' } });
+    return true;
   } catch (e) {
-    console.error('sendPropertyImage error:', prettyAxiosError(e));
+    console.error('sendPropertyImage error:', e?.response?.data || e.message);
     return false;
   }
 }
