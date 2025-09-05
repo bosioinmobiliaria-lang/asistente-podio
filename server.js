@@ -1011,6 +1011,31 @@ async function sendOriginList(to) {
   });
 }
 
+function prettyAxiosError(e) {
+  const d = e?.response?.data;
+  if (Buffer.isBuffer(d)) {
+    try {
+      return JSON.parse(d.toString('utf8'));
+    } catch {
+      return d.toString('utf8');
+    }
+  }
+  return d || e.message;
+}
+
+async function downloadPublicFile(url) {
+  const res = await axios.get(url.replace(/^http:/i, 'https:'), {
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    maxRedirects: 5,
+  });
+  return {
+    buffer: Buffer.from(res.data),
+    contentType: res.headers['content-type'] || 'image/jpeg',
+    filename: (url.split('/').pop() || 'image.jpg').split('?')[0],
+  };
+}
+
 // 3.1) Tipo de propiedad (lista de 8)
 async function sendPropertyTypeList(to) {
   await sendMessage(to, {
@@ -1268,15 +1293,12 @@ const _mediaCache = new Map();
 // Baja el binario desde Podio
 async function downloadPodioFile(fileId) {
   const token = await getAppAccessTokenFor('propiedades');
-  const res = await axios.get(
-    `https://api.podio.com/file/${fileId}/download`,
-    {
-      headers: { Authorization: `OAuth2 ${token}` },
-      responseType: 'arraybuffer',
-      timeout: 30000,
-      maxRedirects: 5,
-    }
-  );
+  const res = await axios.get(`https://api.podio.com/file/${fileId}/download`, {
+    headers: { Authorization: `OAuth2 ${token}` },
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    maxRedirects: 5,
+  });
 
   const buf = Buffer.from(res.data);
   const ct = res.headers['content-type'] || 'application/octet-stream';
@@ -1293,26 +1315,33 @@ async function uploadToWhatsAppMedia(buffer, contentType, filename) {
   const API_VERSION = 'v19.0';
   const url = `https://graph.facebook.com/${API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/media`;
 
+  // Normalizá content-type a algo que WhatsApp soporte bien
+  let ct = (contentType || '').split(';')[0].trim().toLowerCase();
+  if (!/^image\/(jpeg|jpg|png|webp)$/.test(ct)) ct = 'image/jpeg';
+  const safeName = (filename || 'image.jpg').replace(/[^\w.\-]/g, '_');
+
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
-  form.append('file', buffer, {
-    filename,
-    contentType: contentType.startsWith('image/') ? contentType : 'image/jpeg',
-  });
-  form.append('type', contentType.startsWith('image/') ? contentType : 'image/jpeg');
+  form.append('file', buffer, { filename: safeName, contentType: ct });
+  form.append('type', ct);
 
-  const { data } = await axios.post(url, form, {
-    headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`, ...form.getHeaders() },
-    timeout: 30000,
-  });
-  return data.id;
+  try {
+    const { data } = await axios.post(url, form, {
+      headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`, ...form.getHeaders() },
+      timeout: 30000,
+    });
+    return data.id;
+  } catch (e) {
+    console.error('uploadToWhatsAppMedia error:', prettyAxiosError(e));
+    throw e;
+  }
 }
 
 // Busca el primer file_id de imagen en el item (campo imagen o adjuntos)
 async function getFirstImageFileId(item) {
   // 1) campo tipo imagen
   const imgField = (item?.fields || []).find(
-    f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0
+    f => f.type === 'image' && Array.isArray(f.values) && f.values.length > 0,
   );
   const fid = imgField?.values?.[0]?.value?.file_id;
   if (fid) return fid;
@@ -1334,21 +1363,44 @@ async function sendPropertyImage(to, item) {
     const fileId = await getFirstImageFileId(item);
     if (!fileId) return false;
 
+    // cache por fileId
     if (_mediaCache.has(fileId)) {
       const mediaId = _mediaCache.get(fileId);
       await sendMessage(to, { type: 'image', image: { id: mediaId } });
       return true;
     }
 
-    const { buffer, contentType, filename } = await downloadPodioFile(fileId);
-    const mediaId = await uploadToWhatsAppMedia(buffer, contentType, filename);
-    _mediaCache.set(fileId, mediaId);
+    // 1) Intentá descargar el archivo real desde Podio
+    let { buffer, contentType, filename } = await downloadPodioFile(fileId);
+    let ct = (contentType || '').split(';')[0].trim().toLowerCase();
+    const sizeMB = buffer.length / (1024 * 1024);
 
+    // 2) Si NO es un tipo soportado por WhatsApp o pesa demasiado,
+    //    bajamos el thumbnail JPEG público de Podio y usamos ese.
+    const supported = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    const TOO_BIG_MB = 15; // margen seguro para Cloud API
+    if (!supported.has(ct) || sizeMB > TOO_BIG_MB) {
+      const pubLink = await getPodioFileLink(fileId); // suele devolver jpeg
+      if (pubLink) {
+        const alt = await downloadPublicFile(pubLink);
+        buffer = alt.buffer;
+        ct = 'image/jpeg'; // thumbnails de Podio salen en JPEG
+        filename = (filename || `podio-${fileId}.jpg`).replace(/\.[^.]+$/, '.jpg');
+      }
+    }
+
+    // 3) Subir a WhatsApp /media y mandar por media_id
+    const mediaId = await uploadToWhatsAppMedia(
+      buffer,
+      ct || 'image/jpeg',
+      filename || `podio-${fileId}.jpg`,
+    );
+    _mediaCache.set(fileId, mediaId);
     await sendMessage(to, { type: 'image', image: { id: mediaId } });
     return true;
   } catch (e) {
-    console.error('sendPropertyImage error:', e.response?.data || e.message);
-    return false;
+    console.error('sendPropertyImage error:', prettyAxiosError(e));
+    return false; // deja que el caller haga fallback por link
   }
 }
 
