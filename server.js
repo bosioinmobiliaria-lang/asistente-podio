@@ -1275,7 +1275,7 @@ async function searchProperties(filters) {
   if (filters.precio) podioFilters['valor-de-la-propiedad'] = filters.precio;
 
   // Localidad (categoría): [optionId]
-  if (filters.localidad) podioFilters['localidad'] = [filters.localidad];
+  if (filters.localidad) podioFilters['266379964'] = [filters.localidad];
 
   // Tipo (si ya lo tenías mapeado)
   if (filters.tipo) podioFilters['tipo-de-propiedad'] = [filters.tipo];
