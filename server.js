@@ -408,16 +408,12 @@ function formatSingleProperty(prop, currentNumber) {
   const url = extractFirstUrl(typeof raw === 'string' ? raw : raw?.url || '');
   if (url) link = url;
 
-  // 👉 CAMBIOS AQUÍ: Añadimos más saltos de línea y una línea divisoria (opcional)
-  return `
-*${currentNumber}. ${title}*
+  // 👇 CORRECCIÓN: Estructura final sin la línea de guiones
+  return `*${currentNumber}. ${title}*
 ${valor}
 ${localidad}
-🔗 Enlace: ${link}
-----------------------------------
-`.trim(); // El .trim() elimina el salto de línea inicial extra
+🔗 Enlace: ${link}`.trim();
 }
-
 // --- Utilidades Lead / Podio ---
 async function getLeadDetails(itemId) {
   const token = await getAppAccessTokenFor('leads');
@@ -1092,35 +1088,39 @@ async function sendHighPriceList(to) {
   });
 }
 
-// 3.6) Paginado de resultados (5 por página) + botón "Ver más"
+// 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
 async function sendPropertiesPage(to, properties, startIndex = 0) {
   const batchSize = 5;
-  const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado
+  const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado y unificado
 
   for (let i = 0; i < batch.length; i++) {
-    const prop = batch[i]; // Buscamos el campo de texto "link-de-la-foto"
+    const prop = batch[i];
+    const currentNumber = startIndex + i + 1;
 
+    // 1. Obtenemos el link de la imagen (igual que antes)
     const photoLinkField = prop.fields.find(f => f.external_id === 'link-de-la-foto');
-
-    // 👇 CORRECCIÓN AQUÍ: Limpiamos el valor para extraer solo la URL del HTML
     const rawLinkValue = photoLinkField?.values?.[0]?.value || '';
-    const imageUrl = extractFirstUrl(rawLinkValue); // Usamos la función para limpiar el link
-    // Si hay una URL de imagen válida, la enviamos primero
+    const imageUrl = extractFirstUrl(rawLinkValue);
+
+    // 2. Construimos todo el texto que irá en el caption
+    const captionText = formatSingleProperty(prop, currentNumber);
 
     if (imageUrl) {
+      // 3. Si hay imagen, la enviamos con toda la info en el caption
       await sendMessage(to, {
         type: 'image',
         image: {
           link: imageUrl,
-          caption: `*${prop.title}*`,
+          caption: captionText, // <-- TODA la info va aquí
         },
       });
-    } // Luego, enviar el texto formateado de la propiedad
-
-    const message = formatSingleProperty(prop, startIndex + i + 1);
-    await sendMessage(to, { type: 'text', text: { body: message } });
+    } else {
+      // 4. Fallback: Si no hay imagen, enviamos solo el texto para no fallar
+      await sendMessage(to, { type: 'text', text: { body: captionText } });
+    }
   }
 
+  // El resto de la función (paginación) sigue igual
   const hasMore = startIndex + batchSize < properties.length;
   if (hasMore) {
     await sendMessage(to, {
