@@ -2014,12 +2014,20 @@ app.get('/whatsapp', (req, res) => {
 
 // --- 2. Recepción de Mensajes (POST) ---
 app.post('/whatsapp', async (req, res) => {
-  // CAMBIO 1: Respondemos a Meta inmediatamente para evitar timeouts.
+  // 1. Loguear el cuerpo del request APENAS llega.
+  console.log('--- NUEVO MENSAJE RECIBIDO ---', JSON.stringify(req.body, null, 2));
+
+  // 2. Responder a Meta INMEDIATAMENTE para evitar timeouts.
   res.sendStatus(200);
 
+  // 3. Ahora, procesar el mensaje de forma segura.
   try {
     const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (!message) return; // ← primero chequeamos que exista
+
+    if (!message) {
+      console.log('[INFO] Payload sin mensaje de usuario (ej: status). Se ignora.');
+      return;
+    }
 
     // Declaramos las variables ANTES de usarlas
     let userInput = '';
@@ -3464,6 +3472,14 @@ process.on('uncaughtException', (err, origin) => {
   console.error('Error:', err.stack || err);
   console.error('Origen:', origin);
   process.exit(1); // Cierra el proceso después de registrar el error
+});
+
+// RED DE SEGURIDAD ADICIONAL: Atrapa promesas rechazadas no manejadas
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('!!!!!!!!!! PROMESA RECHAZADA SIN MANEJAR !!!!!!!!!!!');
+  console.error('Fecha:', new Date().toISOString());
+  console.error('Razón:', reason.stack || reason);
+  console.error('!!!!!!!!!! FIN DEL REPORTE DE PROMESA !!!!!!!!!!!');
 });
 
 // ----------------------------------------
