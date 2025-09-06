@@ -1094,23 +1094,25 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (5 por página) + botón "Ver más"
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batchSize = 5;
+  const batchSize = 5;
   const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado
 
   for (let i = 0; i < batch.length; i++) {
-    const prop = batch[i];
+    const prop = batch[i]; // Buscamos el campo de texto "link-de-la-foto"
 
-    // 👇 CORRECCIÓN AQUÍ: Leemos la URL del campo de texto "link-de-la-foto"
     const photoLinkField = prop.fields.find(f => f.external_id === 'link-de-la-foto');
-    // Obtenemos el valor de texto de ese campo
-    const imageUrl = photoLinkField?.values?.[0]?.value || null; // Si hay una URL de imagen pública, la enviamos primero
+
+    // 👇 CORRECCIÓN AQUÍ: Limpiamos el valor para extraer solo la URL del HTML
+    const rawLinkValue = photoLinkField?.values?.[0]?.value || '';
+    const imageUrl = extractFirstUrl(rawLinkValue); // Usamos la función para limpiar el link
+    // Si hay una URL de imagen válida, la enviamos primero
 
     if (imageUrl) {
       await sendMessage(to, {
         type: 'image',
         image: {
-          link: imageUrl, // Usamos el link público de Cloudinary
-          caption: `*${prop.title}*`, // Título como pie de foto
+          link: imageUrl,
+          caption: `*${prop.title}*`,
         },
       });
     } // Luego, enviar el texto formateado de la propiedad
@@ -1119,7 +1121,7 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     await sendMessage(to, { type: 'text', text: { body: message } });
   }
 
-  const hasMore = startIndex + batchSize < properties.length;
+  const hasMore = startIndex + batchSize < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1130,7 +1132,6 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       },
     });
   } else {
-    // Si ya mostramos todo, avisamos y ofrecemos opciones finales
     await sendMessage(to, { type: 'text', text: { body: '✅ Esos son todos los resultados.' } });
     await sendPostResultsOptions(to);
   }
