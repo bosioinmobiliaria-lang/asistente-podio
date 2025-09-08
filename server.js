@@ -2950,7 +2950,7 @@ app.post('/whatsapp', async (req, res) => {
               ? nameField.values?.[0]?.value?.title || 'Sin nombre'
               : 'Sin nombre';
 
-            await sendLeadUpdateMenu(from, leadName); // ✅ “Lead encontrado: … ¿Qué querés hacer?”
+            await sendLeadUpdateMenu(from, leadName);
             break;
           }
 
@@ -2960,29 +2960,33 @@ app.post('/whatsapp', async (req, res) => {
           if (contacts?.length) {
             const contact = contacts[0];
             const cName = contact.title || 'Contacto sin nombre';
+            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
 
-            currentState.step = 'awaiting_create_lead_confirm';
-            currentState.tempPhoneDigits = raw;
-            currentState.contactItemId = contact.item_id;
-
+            // --- 👇 MENSAJE MEJORADO CON LINK DIRECTO ---
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                header: { type: 'text', text: `✅ Contacto encontrado: ${cName}` },
-                body: { text: 'No hay un Lead asociado. ¿Querés crear uno y vincularlo?' },
+                header: { type: 'text', text: '✅ Contacto encontrado' },
+                body: {
+                  text: `Contacto: *${cName}*\n\nPara crear el Lead, usá el siguiente enlace:\n${podioLink}`,
+                },
+                footer: { text: 'Una vez creado, volvé al menú para buscarlo.' },
                 action: {
                   buttons: [
-                    { type: 'reply', reply: { id: 'create_lead_yes', title: '✅ Crear Lead' } },
-                    { type: 'reply', reply: { id: 'create_lead_no', title: '❌ Cancelar' } },
+                    { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Volver al Menú' } },
                   ],
                 },
               },
             });
+            // --- ☝️ FIN DEL MENSAJE MEJORADO ---
+
+            // Limpiamos el estado para que la próxima interacción sea desde el menú
+            delete userStates[numeroRemitente];
             break;
           }
 
-          // 3) Tampoco hay Contacto → ofrecer crear Contacto
+          // 3) Tampoco hay Contacto → ofrecer crear Contacto (sin cambios)
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
 
