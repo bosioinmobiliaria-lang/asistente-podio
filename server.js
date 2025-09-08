@@ -45,6 +45,12 @@ function splitDateTime(str) {
   return { date, time };
 }
 
+// --- Obtiene el nombre del asesor asignado de un item ---
+function getAssignedAdvisorName(item) {
+  const field = (item?.fields || []).find(f => f.external_id === 'vendedor-asignado-2');
+  return field?.values?.[0]?.value?.name || field?.values?.[0]?.value?.text || 'No asignado';
+}
+
 function addHours(timeStr, hoursToAdd = 1) {
   const [H, M, S] = timeStr.split(':').map(x => parseInt(x, 10) || 0);
   const d = new Date(Date.UTC(2000, 0, 1, H, M, S));
@@ -2927,7 +2933,6 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'update_lead_start': {
-          // El usuario responde con el celular (o un item_id)
           const raw = (input || '').replace(/\D/g, '');
 
           if (!raw) {
@@ -2938,40 +2943,37 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // 1) Intentar encontrar el Lead por teléfono o por ID
           const found = await findLeadByPhoneOrId(raw);
           if (found.ok && found.leadItem) {
+            // --- ESTA PARTE FUNCIONA BIEN: SI ENCUENTRA UN LEAD, MUESTRA EL MENÚ ---
             const leadItem = found.leadItem;
             currentState.leadItemId = leadItem.item_id;
             currentState.step = 'update_lead_menu';
-
             const nameField = (leadItem.fields || []).find(f => f.external_id === 'contacto-2');
-            const leadName = nameField
-              ? nameField.values?.[0]?.value?.title || 'Sin nombre'
-              : 'Sin nombre';
-
+            const leadName = nameField?.values?.[0]?.value?.title || 'Sin nombre';
             await sendLeadUpdateMenu(from, leadName);
             break;
           }
 
-          // 2) No hay Lead → buscar Contacto para linkear
+          // --- LÓGICA NUEVA: SI NO HAY LEAD, BUSCA CONTACTOS Y OFRECE EL LINK ---
           const contacts = await searchContactByPhone(raw);
-
           if (contacts?.length) {
-            const contact = contacts[0];
-            const cName = contact.title || 'Contacto sin nombre';
-            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
+            let bodyText = `No se encontró ningún Lead para actualizar.\n\nSe encontró *${contacts.length}* contacto(s) con ese número:`;
 
-            // --- 👇 MENSAJE MEJORADO CON LINK DIRECTO ---
+            for (const contact of contacts) {
+              const contactName = contact.title || 'Sin nombre';
+              const advisorName = getAssignedAdvisorName(contact);
+              bodyText += `\n\n• *Contacto:* ${contactName}\n  *Asesor:* ${advisorName}`;
+            }
+
+            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
+            bodyText += `\n\nPara añadir un nuevo Lead, usá el siguiente enlace:\n${podioLink}`;
+
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                header: { type: 'text', text: '✅ Contacto encontrado' },
-                body: {
-                  text: `Contacto: *${cName}*\n\nPara crear el Lead, usá el siguiente enlace:\n${podioLink}`,
-                },
-                footer: { text: 'Una vez creado, volvé al menú para buscarlo.' },
+                body: { text: bodyText },
                 action: {
                   buttons: [
                     { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Volver al Menú' } },
@@ -2979,17 +2981,13 @@ app.post('/whatsapp', async (req, res) => {
                 },
               },
             });
-            // --- ☝️ FIN DEL MENSAJE MEJORADO ---
-
-            // Limpiamos el estado para que la próxima interacción sea desde el menú
             delete userStates[numeroRemitente];
             break;
           }
 
-          // 3) Tampoco hay Contacto → ofrecer crear Contacto (sin cambios)
+          // --- ESTA PARTE SIGUE IGUAL: SI NO HAY NI LEAD NI CONTACTO ---
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
-
           await sendMessage(from, {
             type: 'interactive',
             interactive: {
