@@ -2932,15 +2932,18 @@ app.post('/whatsapp', async (req, res) => {
         case 'update_lead_start': {
           const raw = (input || '').replace(/\D/g, '');
 
-          if (!raw) {
+          // --- 👇 NUEVA VALIDACIÓN DE 10 DÍGITOS ---
+          // Ahora verificamos la longitud ANTES de buscar.
+          if (raw.length !== 10) {
             await sendMessage(from, {
               type: 'text',
               text: {
-                body: '📱 Ingresá el *número de celular* (10 dígitos sin 0 ni 15) para buscar el lead que querés actualizar.',
+                body: '⚠️ El número parece incorrecto. Por favor, ingresá los *10 dígitos* del celular (sin 0 ni 15).',
               },
             });
-            break;
+            break; // Mantenemos al usuario en este paso para que reintente.
           }
+          // --- ☝️ FIN DE LA VALIDACIÓN ---
 
           const found = await findLeadByPhoneOrId(raw);
           if (found.ok && found.leadItem) {
@@ -2962,11 +2965,9 @@ app.post('/whatsapp', async (req, res) => {
               const advisorName = getAssignedAdvisorName(contact);
               bodyText += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
             }
-
             bodyText += `\n\n¿Deseas añadir un nuevo Lead?`;
-
+            
             currentState.step = 'awaiting_create_lead_decision';
-
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
@@ -2990,14 +2991,10 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // --- 👇 ÚLTIMO AJUSTE VISUAL APLICADO AQUÍ ---
-          // Mensaje mejorado para cuando no se encuentra NADA
           const headerText = `⚠️ No se encontró nada con el número ${raw}`;
           const bodyText = 'Podés crear un nuevo contacto desde cero o intentar con otro número.';
-
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
-
           await sendMessage(from, {
             type: 'interactive',
             interactive: {
@@ -3386,16 +3383,10 @@ app.post('/whatsapp', async (req, res) => {
           if (input === 'after_back_menu') {
             delete userStates[numeroRemitente];
             await sendMainMenu(from);
-          } else if (input === 'after_done' || low === 'cancelar' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '✨ Fue un gusto ayudarte. Estoy para acompañarte; cuando quieras, escribime. 🙌',
-              },
-            });
           } else {
-            await sendAfterUpdateOptions(from);
+            // Si la respuesta es "Cancelar" o cualquier otra cosa
+            delete userStates[numeroRemitente];
+            await sendFarewell(from); // <-- LLAMADA A LA FUNCIÓN DE DESPEDIDA
           }
           break;
         }
