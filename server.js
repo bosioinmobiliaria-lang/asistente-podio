@@ -1089,8 +1089,9 @@ async function sendHighPriceList(to) {
 }
 
 // 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
+// 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batchSize = 5;
+  const batchSize = 5;
   const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado y unificado
 
   for (let i = 0; i < batch.length; i++) {
@@ -1101,16 +1102,10 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     const rawLinkValue = photoLinkField?.values?.[0]?.value || '';
     let imageUrl = extractFirstUrl(rawLinkValue);
 
-    // 👇 --- NUEVO BLOQUE: Transformación de la imagen a formato cuadrado --- 👇
     if (imageUrl && imageUrl.includes('res.cloudinary.com')) {
-      // Definimos las transformaciones: 1000px, aspect ratio 1:1 (cuadrado),
-      // modo 'fill' (rellenar y cortar), y 'gravity auto' (corte inteligente).
       const transformations = 'w_1000,ar_1:1,c_fill,g_auto';
-
-      // Insertamos las transformaciones en la URL de Cloudinary
       imageUrl = imageUrl.replace('/upload/', `/upload/${transformations}/`);
     }
-    // ☝️ --- FIN DEL NUEVO BLOQUE --- ☝️
 
     const captionText = formatSingleProperty(prop, currentNumber);
 
@@ -1118,7 +1113,7 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       await sendMessage(to, {
         type: 'image',
         image: {
-          link: imageUrl, // <-- Usamos la URL ya transformada
+          link: imageUrl,
           caption: captionText,
         },
       });
@@ -1127,7 +1122,8 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     }
   }
 
-  const hasMore = startIndex + batchSize < properties.length;
+  // 👇 --- SECCIÓN RESTAURADA: Lógica para mostrar el botón "Ver más" --- 👇
+  const hasMore = startIndex + batchSize < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
@@ -1138,9 +1134,11 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       },
     });
   } else {
+    // Si ya no hay más, avisamos y damos opciones finales
     await sendMessage(to, { type: 'text', text: { body: '✅ Esos son todos los resultados.' } });
     await sendPostResultsOptions(to);
   }
+  // ☝️ --- FIN DE LA SECCIÓN RESTAURADA --- ☝️
 }
 
 // Lista dinámica de opciones del campo categoría "documentacion"
