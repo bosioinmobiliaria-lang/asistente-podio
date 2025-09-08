@@ -1090,38 +1090,44 @@ async function sendHighPriceList(to) {
 
 // 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batchSize = 5;
+  const batchSize = 5;
   const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado y unificado
 
   for (let i = 0; i < batch.length; i++) {
     const prop = batch[i];
     const currentNumber = startIndex + i + 1;
 
-    // 1. Obtenemos el link de la imagen (igual que antes)
     const photoLinkField = prop.fields.find(f => f.external_id === 'link-de-la-foto');
     const rawLinkValue = photoLinkField?.values?.[0]?.value || '';
-    const imageUrl = extractFirstUrl(rawLinkValue);
+    let imageUrl = extractFirstUrl(rawLinkValue);
 
-    // 2. Construimos todo el texto que irá en el caption
+    // 👇 --- NUEVO BLOQUE: Transformación de la imagen a formato cuadrado --- 👇
+    if (imageUrl && imageUrl.includes('res.cloudinary.com')) {
+      // Definimos las transformaciones: 1000px, aspect ratio 1:1 (cuadrado),
+      // modo 'fill' (rellenar y cortar), y 'gravity auto' (corte inteligente).
+      const transformations = 'w_1000,ar_1:1,c_fill,g_auto';
+
+      // Insertamos las transformaciones en la URL de Cloudinary
+      imageUrl = imageUrl.replace('/upload/', `/upload/${transformations}/`);
+    }
+    // ☝️ --- FIN DEL NUEVO BLOQUE --- ☝️
+
     const captionText = formatSingleProperty(prop, currentNumber);
 
     if (imageUrl) {
-      // 3. Si hay imagen, la enviamos con toda la info en el caption
       await sendMessage(to, {
         type: 'image',
         image: {
-          link: imageUrl,
-          caption: captionText, // <-- TODA la info va aquí
+          link: imageUrl, // <-- Usamos la URL ya transformada
+          caption: captionText,
         },
       });
     } else {
-      // 4. Fallback: Si no hay imagen, enviamos solo el texto para no fallar
       await sendMessage(to, { type: 'text', text: { body: captionText } });
     }
   }
 
-  // El resto de la función (paginación) sigue igual
-  const hasMore = startIndex + batchSize < properties.length;
+  const hasMore = startIndex + batchSize < properties.length;
   if (hasMore) {
     await sendMessage(to, {
       type: 'interactive',
