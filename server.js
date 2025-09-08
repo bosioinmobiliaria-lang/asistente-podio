@@ -2740,23 +2740,28 @@ app.post('/whatsapp', async (req, res) => {
           });
           break;
 
-        case 'awaiting_create_lead_confirm': {
-          if (input === 'create_lead_yes') {
-            // inicia wizard
-            currentState.step = 'awaiting_inquietud';
-            currentState.leadDraft = {};
-            await sendInquietudList(from);
-          } else if (input === 'create_lead_no' || low === 'cancelar') {
-            delete userStates[numeroRemitente];
-            await sendFarewell(from);
+        case 'awaiting_create_lead_decision': {
+          // Si el usuario presiona "Sí, añadir"
+          if (input === 'create_lead_confirm_yes') {
+            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
+            const fullMessage = `¡Perfecto! Para crear y vincular el nuevo Lead al contacto, usá el siguiente enlace:\n\n${podioLink}`;
+
+            await sendMessage(from, { type: 'text', text: { body: fullMessage } });
+            await sendAfterUpdateOptions(from); // Muestra "Menú Principal" / "Cancelar"
+
+            // Si el usuario presiona "No, volver al menú"
+          } else if (input === 'create_lead_confirm_no') {
+            await sendMainMenu(from);
+
+            // Si responde cualquier otra cosa
           } else {
-            // re-mostrar botones
-            const name = currentState.contactItemId ? 'Contacto' : '';
             await sendMessage(from, {
               type: 'text',
-              text: { body: 'Tocá un botón para continuar. ✅ / ❌' },
+              text: { body: 'Opción no válida. Volviendo al menú.' },
             });
+            await sendMainMenu(from);
           }
+          delete userStates[numeroRemitente];
           break;
         }
 
