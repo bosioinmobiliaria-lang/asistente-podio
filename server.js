@@ -3432,13 +3432,13 @@ app.post('/whatsapp', async (req, res) => {
 
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente];
 
-            // --- CORRECCIÓN CLAVE: Usamos los IDs de Campo numéricos ---
-            // Esto es más robusto que usar los 'ID externa' de texto.
+            // --- CORRECCIÓN FINAL: Volvemos a usar los ID externa de texto ---
+            // Esto hace que el código sea más fácil de leer y resistente a cambios.
             const fields = {
-              265956030: [currentState.visitData.lead_item_id], // ID de Campo para 'Interesado (Lead)'
-              265656038: forceRangeDate(currentState.visitData.fecha), // ID de Campo para 'Fecha'
-              265656035: currentState.visitData.notes, // ID de Campo para 'Comentarios adicionales'
-              267394059: vendedorId ? [vendedorId] : undefined, // ID de Campo para 'Vendedor Asignado'
+              'related-lead': [currentState.visitData.lead_item_id],
+              date: forceRangeDate(currentState.visitData.fecha),
+              notes: currentState.visitData.notes,
+              'vendedor-asignado': vendedorId ? [vendedorId] : undefined,
             };
 
             await createItemIn('visitas', fields);
