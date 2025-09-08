@@ -2089,22 +2089,20 @@ app.post('/whatsapp', async (req, res) => {
       delete userStates[numeroRemitente];
 
       if (input === 'menu_check_contact') {
-        userStates[numeroRemitente] = { step: 'check_contact_start' };
-        await sendMessage(from, {
-          type: 'text',
-          text: { body: '📱 Pasame el *celular* (10 dígitos, sin 0/15).' },
-        });
+        // ... (sin cambios)
       } else if (input === 'menu_actualizar') {
+        // <-- ESTA ES LA PARTE A CAMBIAR
         userStates[numeroRemitente] = { step: 'update_lead_start' };
         await sendMessage(from, {
           type: 'text',
-          text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos) o el *ID* del lead.' },
+          text: {
+            body: '📱 Ingresá el *número de celular* (10 dígitos sin 0 ni 15) para buscar el lead que querés actualizar.',
+          },
         });
       } else if (input === 'menu_buscar') {
-        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-        await sendPropertyTypeList(from);
+        // ... (sin cambios)
       }
-      return; // 👈 importantísimo: cortamos el flujo acá
+      return;
     }
 
     // CAMBIO 3: La variable "respuesta" se elimina. Cada respuesta se envía directamente.
@@ -2938,7 +2936,9 @@ app.post('/whatsapp', async (req, res) => {
           if (!raw) {
             await sendMessage(from, {
               type: 'text',
-              text: { body: '📱 Enviame el *celular* (10 dígitos, sin 0/15) o el *ID* del lead.' },
+              text: {
+                body: '📱 Ingresá el *número de celular* (10 dígitos sin 0 ni 15) para buscar el lead.',
+              },
             });
             break;
           }
@@ -2954,32 +2954,26 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // --- 👇 LÓGICA CON MENSAJE VISUAL MEJORADO ---
           const contacts = await searchContactByPhone(raw);
           if (contacts?.length) {
-            // 1. Título principal
-            let headerText = '⚠️ No se encontró un Lead asociado.';
-            
-            // 2. Construcción de la lista de contactos encontrados
-            let contactsList = '';
+            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
+            let contactList = '';
             for (const contact of contacts) {
               const contactName = contact.title || 'Sin nombre';
               const advisorName = getAssignedAdvisorName(contact);
-              contactsList += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
+              contactList += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
             }
 
-            // 3. Link de acción
-            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
-            const footerText = `Para añadir un nuevo Lead, usá este enlace:\n${podioLink}`;
-            
-            // 4. Se envía el mensaje interactivo
+            // --- 👇 MENSAJE REESTRUCTURADO PARA CUMPLIR LÍMITES ---
+            const bodyText = `${contactList.trim()}\n\nPara añadir un nuevo Lead, usá este enlace:\n${podioLink}`;
+
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                header: { type: 'text', text: headerText },
-                body: { text: contactsList.trim() },
-                footer: { text: footerText },
+                header: { type: 'text', text: '⚠️ No se encontró un Lead asociado' },
+                body: { text: bodyText },
+                footer: { text: 'Tip: Creá el lead y volvé al menú.' }, // <-- Footer corto
                 action: {
                   buttons: [
                     { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Volver al Menú' } },
@@ -2990,7 +2984,7 @@ app.post('/whatsapp', async (req, res) => {
             delete userStates[numeroRemitente];
             break;
           }
-          // --- ☝️ FIN DE LA LÓGICA MEJORADA ---
+          // --- ☝️ FIN DE LA CORRECCIÓN ---
 
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
@@ -3440,35 +3434,20 @@ app.post('/whatsapp', async (req, res) => {
       } // end switch con estado
     } else {
       // Sin estado: menú inicial
-      if (input === 'menu_check_contact') {
-        userStates[numeroRemitente] = { step: 'check_contact_start' };
+      // Si llegamos aquí sin estado, es un usuario nuevo o uno que vuelve a empezar.
+      const key = 'whatsapp:+' + from;
+      if (!ASESOR_NOMBRE_MAP[key] && !USER_NAME_MAP[key]) {
+        // Si no lo conocemos, pedimos su nombre.
+        userStates[numeroRemitente] = { step: 'collect_display_name' };
         await sendMessage(from, {
           type: 'text',
-          text: { body: '📱 Pasame el *celular* (10 dígitos, sin 0/15).' },
+          text: {
+            body: 'Hola, soy *Bosi*, asistente de Bosio Inmobiliaria. ¿Cómo te llamás? 🙂',
+          },
         });
-      } else if (input === 'menu_actualizar') {
-        userStates[numeroRemitente] = { step: 'update_lead_start' };
-        await sendMessage(from, {
-          type: 'text',
-          text: { body: '🛠️ Actualizar lead\nEnviá el *celular* (10 dígitos) o el *ID* del lead.' },
-        });
-      } else if (input === 'menu_buscar') {
-        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
-        await sendPropertyTypeList(from);
       } else {
-        // Si es un número nuevo, nos presentamos y pedimos nombre; si no, mostramos menú
-        const key = 'whatsapp:+' + from;
-        if (!ASESOR_NOMBRE_MAP[key] && !USER_NAME_MAP[key]) {
-          userStates[numeroRemitente] = { step: 'collect_display_name' };
-          await sendMessage(from, {
-            type: 'text',
-            text: {
-              body: 'Hola, soy *Bosi*, asistente de Bosio Inmobiliaria. ¿Cómo te llamás? 🙂',
-            },
-          });
-        } else {
-          await sendMainMenu(from);
-        }
+        // Si ya lo conocemos, le mostramos el menú principal.
+        await sendMainMenu(from);
       }
     }
   } catch (err) {
