@@ -3065,14 +3065,22 @@ app.post('/whatsapp', async (req, res) => {
               },
             });
           } else if (input === 'update_visit') {
-            // --- INICIA EL NUEVO FLUJO DE AGENDAR VISITA ---
-            currentState.step = 'visit_flow_find_property';
-            // Inicializamos un objeto para guardar los datos de la visita
+            // --- INICIA EL NUEVO FLUJO SIMPLIFICADO ---
+            currentState.step = 'visit_flow_select_date'; // Saltamos directo a la fecha
             currentState.visitData = { lead_item_id: leadId };
+
             await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '🏠 Perfecto. Para agendar la visita, decime el nombre o parte del nombre de la propiedad.',
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: '📅 ¿Cuándo fue o será la visita?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: 'visit_date_today', title: '✅ Hoy' } },
+                    { type: 'reply', reply: { id: 'visit_date_tomorrow', title: '🗓️ Mañana' } },
+                    { type: 'reply', reply: { id: 'visit_date_other', title: '📝 Otra fecha' } },
+                  ],
+                },
               },
             });
           } else {
@@ -3341,84 +3349,6 @@ app.post('/whatsapp', async (req, res) => {
 
         // --- NUEVO FLUJO PARA AGENDAR VISITAS ---
 
-        case 'visit_flow_find_property': {
-          const query = (input || '').trim();
-          if (query.length < 3) {
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '📝 Por favor, ingresá al menos 3 letras del nombre de la propiedad para buscar.',
-              },
-            });
-            break;
-          }
-
-          await sendMessage(from, {
-            type: 'text',
-            text: { body: `🔎 Buscando propiedades que coincidan con "*${query}*"...` },
-          });
-          const properties = await searchPropertiesByTextQuery(query);
-
-          if (!properties.length) {
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '😕 No encontré propiedades con ese nombre. Intentá con otro término de búsqueda.',
-              },
-            });
-            break; // Mantenemos al usuario en este paso
-          }
-
-          currentState.step = 'visit_flow_select_property';
-          const rows = properties.map(p => ({
-            id: `visit_prop_${p.item_id}`,
-            title: p.title.slice(0, 24),
-          }));
-
-          await sendMessage(from, {
-            type: 'interactive',
-            interactive: {
-              type: 'list',
-              body: { text: 'Encontré estas propiedades. ¿Cuál es la correcta?' },
-              action: {
-                button: 'Elegir propiedad',
-                sections: [{ title: 'Resultados', rows }],
-              },
-            },
-          });
-          break;
-        }
-
-        case 'visit_flow_select_property': {
-          const match = (input || '').match(/^visit_prop_(\d+)$/);
-          if (!match) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: 'Por favor, elegí una propiedad de la lista.' },
-            });
-            break;
-          }
-
-          currentState.visitData.propiedad_item_id = parseInt(match[1], 10);
-          currentState.step = 'visit_flow_select_date';
-
-          await sendMessage(from, {
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: '📅 ¿Cuándo será la visita?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: 'visit_date_today', title: '✅ Hoy' } },
-                  { type: 'reply', reply: { id: 'visit_date_tomorrow', title: '🗓️ Mañana' } },
-                  { type: 'reply', reply: { id: 'visit_date_other', title: '📝 Otra fecha' } },
-                ],
-              },
-            },
-          });
-          break;
-        }
-
         case 'visit_flow_select_date': {
           const today = new Date();
           let visitDate = null;
@@ -3481,7 +3411,7 @@ app.post('/whatsapp', async (req, res) => {
 
         case 'visit_flow_add_notes': {
           let notes = (input || '').trim();
-
+          
           if (notes.toLowerCase() === 'ninguno') {
             notes = 'Sin comentarios adicionales.';
           } else if (currentState.lastInputType === 'audio' && notes) {
@@ -3491,21 +3421,20 @@ app.post('/whatsapp', async (req, res) => {
             });
             notes = await summarizeWithOpenAI(notes);
           }
-
+          
           currentState.visitData.notes = notes;
-
-          // --- CREACIÓN DEL ITEM EN PODIO ---
+          
           try {
             await sendMessage(from, {
               type: 'text',
               text: { body: '✅ Agendando la visita en Podio... Un momento.' },
             });
 
-            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente]; // Usamos el mapa de leads
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente];
 
+            // --- PAYLOAD SIMPLIFICADO: YA NO INCLUYE LA PROPIEDAD ---
             const fields = {
               'related-lead': [currentState.visitData.lead_item_id],
-              propiedad: [currentState.visitData.propiedad_item_id],
               date: forceRangeDate(currentState.visitData.fecha),
               notes: currentState.visitData.notes,
               'vendedor-asignado': vendedorId ? [vendedorId] : undefined,
