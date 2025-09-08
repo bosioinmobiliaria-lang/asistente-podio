@@ -2937,7 +2937,7 @@ app.post('/whatsapp', async (req, res) => {
             await sendMessage(from, {
               type: 'text',
               text: {
-                body: '📱 Ingresá el *número de celular* (10 dígitos sin 0 ni 15) para buscar el lead.',
+                body: '📱 Ingresá el *número de celular* (10 dígitos sin 0 ni 15) para buscar el lead que querés actualizar.',
               },
             });
             break;
@@ -2954,18 +2954,21 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
+          // --- 👇 LÓGICA MEJORADA CON CONTEO Y PREGUNTA INTERACTIVA ---
           const contacts = await searchContactByPhone(raw);
           if (contacts?.length) {
-            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
-            let contactList = '';
+            let bodyText = `Se encontró *${contacts.length}* contacto(s) con ese número:`;
+
             for (const contact of contacts) {
               const contactName = contact.title || 'Sin nombre';
               const advisorName = getAssignedAdvisorName(contact);
-              contactList += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
+              bodyText += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
             }
 
-            // --- 👇 MENSAJE REESTRUCTURADO PARA CUMPLIR LÍMITES ---
-            const bodyText = `${contactList.trim()}\n\nPara añadir un nuevo Lead, usá este enlace:\n${podioLink}`;
+            bodyText += `\n\n¿Deseas añadir un nuevo Lead?`;
+
+            // Cambiamos el estado para esperar la respuesta del usuario
+            currentState.step = 'awaiting_create_lead_decision';
 
             await sendMessage(from, {
               type: 'interactive',
@@ -2973,18 +2976,23 @@ app.post('/whatsapp', async (req, res) => {
                 type: 'button',
                 header: { type: 'text', text: '⚠️ No se encontró un Lead asociado' },
                 body: { text: bodyText },
-                footer: { text: 'Tip: Creá el lead y volvé al menú.' }, // <-- Footer corto
                 action: {
                   buttons: [
-                    { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Volver al Menú' } },
+                    {
+                      type: 'reply',
+                      reply: { id: 'create_lead_confirm_yes', title: '✅ Sí, añadir' },
+                    },
+                    {
+                      type: 'reply',
+                      reply: { id: 'create_lead_confirm_no', title: '🏠 No, volver al menú' },
+                    },
                   ],
                 },
               },
             });
-            delete userStates[numeroRemitente];
             break;
           }
-          // --- ☝️ FIN DE LA CORRECCIÓN ---
+          // --- ☝️ FIN DE LA LÓGICA MEJORADA ---
 
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
