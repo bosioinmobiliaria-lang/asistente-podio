@@ -3432,12 +3432,13 @@ app.post('/whatsapp', async (req, res) => {
 
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente];
 
-            // --- PAYLOAD SIMPLIFICADO: YA NO INCLUYE LA PROPIEDAD ---
+            // --- CORRECCIÓN CLAVE: Usamos los IDs de Campo numéricos ---
+            // Esto es más robusto que usar los 'ID externa' de texto.
             const fields = {
-              'related-lead': [currentState.visitData.lead_item_id],
-              date: forceRangeDate(currentState.visitData.fecha),
-              notes: currentState.visitData.notes,
-              'vendedor-asignado': vendedorId ? [vendedorId] : undefined,
+              265956030: [currentState.visitData.lead_item_id], // ID de Campo para 'Interesado (Lead)'
+              265656038: forceRangeDate(currentState.visitData.fecha), // ID de Campo para 'Fecha'
+              265656035: currentState.visitData.notes, // ID de Campo para 'Comentarios adicionales'
+              267394059: vendedorId ? [vendedorId] : undefined, // ID de Campo para 'Vendedor Asignado'
             };
 
             await createItemIn('visitas', fields);
@@ -3447,14 +3448,10 @@ app.post('/whatsapp', async (req, res) => {
               text: { body: '🎉 ¡Visita agendada con éxito en Podio!' },
             });
             await sendAfterUpdateOptions(from);
-          } catch (e) {
+            
+          } catch(e) {
             console.error('Error al crear la visita en Podio:', e.response?.data || e.message);
-            await sendMessage(from, {
-              type: 'text',
-              text: {
-                body: '❌ Hubo un error al intentar crear la visita en Podio. Por favor, intentá de nuevo más tarde.',
-              },
-            });
+            await sendMessage(from, { type: 'text', text: { body: '❌ Hubo un error al intentar crear la visita en Podio. Por favor, intentá de nuevo más tarde.' } });
           }
 
           delete userStates[numeroRemitente];
