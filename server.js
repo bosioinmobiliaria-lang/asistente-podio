@@ -1091,10 +1091,10 @@ async function sendHighPriceList(to) {
 // 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
 // 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batchSize = 5;
-  const batch = properties.slice(startIndex, startIndex + batchSize); // Enviamos cada propiedad de la tanda en un mensaje separado y unificado
+  const batchSize = 5;
+  const batch = properties.slice(startIndex, startIndex + batchSize);
 
-  for (let i = 0; i < batch.length; i++) {
+  for (let i = 0; i < batch.length; i++) {
     const prop = batch[i];
     const currentNumber = startIndex + i + 1;
 
@@ -1112,33 +1112,37 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
     if (imageUrl) {
       await sendMessage(to, {
         type: 'image',
-        image: {
-          link: imageUrl,
-          caption: captionText,
-        },
+        image: { link: imageUrl, caption: captionText },
       });
     } else {
       await sendMessage(to, { type: 'text', text: { body: captionText } });
     }
-  }
 
-  // 👇 --- SECCIÓN RESTAURADA: Lógica para mostrar el botón "Ver más" --- 👇
-  const hasMore = startIndex + batchSize < properties.length;
-  if (hasMore) {
-    await sendMessage(to, {
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: { text: '¿Ver más resultados?' },
-        action: { buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }] },
-      },
-    });
-  } else {
-    // Si ya no hay más, avisamos y damos opciones finales
-    await sendMessage(to, { type: 'text', text: { body: '✅ Esos son todos los resultados.' } });
-    await sendPostResultsOptions(to);
+    // 👇 --- LÓGICA MEJORADA: Enviar el botón DESPUÉS de la última propiedad de la tanda --- 👇
+    const isLastInBatch = i === batch.length - 1;
+    if (isLastInBatch) {
+      const hasMore = startIndex + batchSize < properties.length;
+      if (hasMore) {
+        await sendMessage(to, {
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: '¿Ver más resultados?' },
+            action: {
+              buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }],
+            },
+          },
+        });
+      } else {
+        await sendMessage(to, {
+          type: 'text',
+          text: { body: '✅ Esos son todos los resultados.' },
+        });
+        await sendPostResultsOptions(to);
+      }
+    }
+    // ☝️ --- FIN DE LA LÓGICA MEJORADA --- ☝️
   }
-  // ☝️ --- FIN DE LA SECCIÓN RESTAURADA --- ☝️
 }
 
 // Lista dinámica de opciones del campo categoría "documentacion"
