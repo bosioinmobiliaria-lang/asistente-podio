@@ -1478,11 +1478,7 @@ async function sendFarewell(to) {
 
 async function createItemIn(appName, fields) {
   const appId =
-    appName === 'leads'
-      ? process.env.PODIO_LEADS_APP_ID
-      : appName === 'visitas'
-        ? process.env.PODIO_VISITAS_APP_ID
-        : process.env.PODIO_CONTACTOS_APP_ID;
+    appName === 'leads' ? process.env.PODIO_LEADS_APP_ID : process.env.PODIO_CONTACTOS_APP_ID;
 
   const token = await getAppAccessTokenFor(appName);
 
@@ -1490,13 +1486,7 @@ async function createItemIn(appName, fields) {
   const inputFields = typeof cleanDeep === 'function' ? cleanDeep(fields) : fields || {};
 
   // Solo traigo meta para LEADS; en otros apps no filtro por meta.
-  const meta =
-    appName === 'leads'
-      ? (await getLeadsFieldsMeta()) || []
-      : appName === 'visitas'
-        ? (await getAppMeta(process.env.PODIO_VISITAS_APP_ID, 'visitas'))?.fields || []
-        : [];
-
+  const meta = appName === 'leads' ? (await getLeadsFieldsMeta()) || [] : [];
   const hasMeta = Array.isArray(meta) && meta.length > 0;
   const byExt = hasMeta ? new Map(meta.map(f => [f.external_id, f])) : null;
 
@@ -2022,32 +2012,6 @@ const PRICE_RANGES_HIGH = {
   h1: { from: 200000, to: 300000 },
   h2: { from: 300000, to: 500000 },
   h3: { from: 500000, to: 99999999 },
-};
-
-// === VISITAS: opción "Vendedor Asignado" (category) ===
-// IDs reales (app Visita a la propiedad)
-const VISITAS_VENDEDOR_OPTION_ID = {
-  'Diego Rodriguez': 1,
-  'Carlos Perez': 2,
-  'Esteban Bosio': 3,
-  'Esteban Coll': 4,
-  'Maqui Monserrat': 5,
-  'Maximiliano Perez': 6,
-  'Lautaro Guardamagna': 7,
-  'Rodrigo Barrionuevo': 8,
-  'Santiago Bosio': 9,
-  'Gabriel Perez': 10,
-};
-
-// Mapeo: número de WhatsApp -> option_id de la app VISITAS
-const VENDEDORES_VISITAS_MAP = {
-  'whatsapp:+5493571605532': VISITAS_VENDEDOR_OPTION_ID['Diego Rodriguez'],
-  'whatsapp:+5493546545121': VISITAS_VENDEDOR_OPTION_ID['Carlos Perez'],
-  'whatsapp:+5493546560311': VISITAS_VENDEDOR_OPTION_ID['Esteban Bosio'],
-  'whatsapp:+5493546490249': VISITAS_VENDEDOR_OPTION_ID['Esteban Coll'],
-  'whatsapp:+5493546549847': VISITAS_VENDEDOR_OPTION_ID['Maximiliano Perez'],
-  'whatsapp:+5493546513759': VISITAS_VENDEDOR_OPTION_ID['Santiago Bosio'],
-  'whatsapp:+5493546452443': VISITAS_VENDEDOR_OPTION_ID['Gabriel Perez'],
 };
 
 // ✅ IDs REALES (extraídos de tus capturas)
@@ -3466,23 +3430,15 @@ app.post('/whatsapp', async (req, res) => {
               text: { body: '✅ Agendando la visita en Podio... Un momento.' },
             });
 
-            const vendedorIdVisitas =
-              (typeof VENDEDORES_VISITAS_MAP !== 'undefined' &&
-                VENDEDORES_VISITAS_MAP[numeroRemitente]) ||
-              null;
+            const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente];
 
+            // --- CORRECCIÓN FINAL: Volvemos a usar los ID externa de texto ---
+            // Esto hace que el código sea más fácil de leer y resistente a cambios.
             const fields = {
-              // App reference: **array de objetos** { item_id }
-              'related-lead': [{ item_id: currentState.visitData.lead_item_id }],
-
-              // Fecha: tu helper ya devuelve start/end o start_date/end_date
+              'related-lead': [currentState.visitData.lead_item_id],
               date: forceRangeDate(currentState.visitData.fecha),
-
-              // Texto:
               notes: currentState.visitData.notes,
-
-              // Categoría: solo si tenés el option_id correcto en la app Visitas
-              ...(vendedorIdVisitas ? { 'vendedor-asignado': [vendedorIdVisitas] } : {}),
+              'vendedor-asignado': vendedorId ? [vendedorId] : undefined,
             };
 
             await createItemIn('visitas', fields);
