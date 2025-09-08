@@ -2741,27 +2741,21 @@ app.post('/whatsapp', async (req, res) => {
           break;
 
         case 'awaiting_create_lead_decision': {
-          // Si el usuario presiona "Sí, añadir"
           if (input === 'create_lead_confirm_yes') {
             const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
-            const fullMessage = `¡Perfecto! Para crear y vincular el nuevo Lead al contacto, usá el siguiente enlace:\n\n${podioLink}`;
+            const fullMessage = `¡Perfecto! Para crear y vincular el nuevo Lead, usá el siguiente enlace:\n\n${podioLink}`;
 
             await sendMessage(from, { type: 'text', text: { body: fullMessage } });
-            await sendAfterUpdateOptions(from); // Muestra "Menú Principal" / "Cancelar"
 
-            // Si el usuario presiona "No, volver al menú"
-          } else if (input === 'create_lead_confirm_no') {
-            await sendMainMenu(from);
-
-            // Si responde cualquier otra cosa
+            // --- CORRECCIÓN AQUÍ ---
+            // Actualizamos el estado para que sepa qué esperar después.
+            currentState.step = 'after_update_options';
+            await sendAfterUpdateOptions(from); // Muestra "¿Necesitás algo más?"
           } else {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: 'Opción no válida. Volviendo al menú.' },
-            });
+            // Si la respuesta es "No" o cualquier otra cosa
             await sendMainMenu(from);
+            delete userStates[numeroRemitente];
           }
-          delete userStates[numeroRemitente];
           break;
         }
 
@@ -2959,7 +2953,6 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // --- 👇 LÓGICA MEJORADA CON CONTEO Y PREGUNTA INTERACTIVA ---
           const contacts = await searchContactByPhone(raw);
           if (contacts?.length) {
             let bodyText = `Se encontró *${contacts.length}* contacto(s) con ese número:`;
@@ -2972,7 +2965,6 @@ app.post('/whatsapp', async (req, res) => {
 
             bodyText += `\n\n¿Deseas añadir un nuevo Lead?`;
 
-            // Cambiamos el estado para esperar la respuesta del usuario
             currentState.step = 'awaiting_create_lead_decision';
 
             await sendMessage(from, {
@@ -2997,17 +2989,21 @@ app.post('/whatsapp', async (req, res) => {
             });
             break;
           }
-          // --- ☝️ FIN DE LA LÓGICA MEJORADA ---
+
+          // --- 👇 ÚLTIMO AJUSTE VISUAL APLICADO AQUÍ ---
+          // Mensaje mejorado para cuando no se encuentra NADA
+          const headerText = `⚠️ No se encontró nada con el número ${raw}`;
+          const bodyText = 'Podés crear un nuevo contacto desde cero o intentar con otro número.';
 
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
+
           await sendMessage(from, {
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: {
-                text: `⚠️ No existe un Lead ni un Contacto con *${raw}*.\n¿Querés crear el contacto ahora?`,
-              },
+              header: { type: 'text', text: headerText },
+              body: { text: bodyText },
               action: {
                 buttons: [
                   {
