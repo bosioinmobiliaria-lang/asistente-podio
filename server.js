@@ -2938,14 +2938,13 @@ app.post('/whatsapp', async (req, res) => {
           if (!raw) {
             await sendMessage(from, {
               type: 'text',
-              text: { body: '📱 Mandame el *celular* (10 dígitos, sin 0/15) o el *ID* del lead.' },
+              text: { body: '📱 Enviame el *celular* (10 dígitos, sin 0/15) o el *ID* del lead.' },
             });
             break;
           }
 
           const found = await findLeadByPhoneOrId(raw);
           if (found.ok && found.leadItem) {
-            // --- ESTA PARTE FUNCIONA BIEN: SI ENCUENTRA UN LEAD, MUESTRA EL MENÚ ---
             const leadItem = found.leadItem;
             currentState.leadItemId = leadItem.item_id;
             currentState.step = 'update_lead_menu';
@@ -2955,25 +2954,32 @@ app.post('/whatsapp', async (req, res) => {
             break;
           }
 
-          // --- LÓGICA NUEVA: SI NO HAY LEAD, BUSCA CONTACTOS Y OFRECE EL LINK ---
+          // --- 👇 LÓGICA CON MENSAJE VISUAL MEJORADO ---
           const contacts = await searchContactByPhone(raw);
           if (contacts?.length) {
-            let bodyText = `No se encontró ningún Lead para actualizar.\n\nSe encontró *${contacts.length}* contacto(s) con ese número:`;
-
+            // 1. Título principal
+            let headerText = '⚠️ No se encontró un Lead asociado.';
+            
+            // 2. Construcción de la lista de contactos encontrados
+            let contactsList = '';
             for (const contact of contacts) {
               const contactName = contact.title || 'Sin nombre';
               const advisorName = getAssignedAdvisorName(contact);
-              bodyText += `\n\n• *Contacto:* ${contactName}\n  *Asesor:* ${advisorName}`;
+              contactsList += `\n\n👤 *${contactName}*\n   └ Asesor: ${advisorName}`;
             }
 
+            // 3. Link de acción
             const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
-            bodyText += `\n\nPara añadir un nuevo Lead, usá el siguiente enlace:\n${podioLink}`;
-
+            const footerText = `Para añadir un nuevo Lead, usá este enlace:\n${podioLink}`;
+            
+            // 4. Se envía el mensaje interactivo
             await sendMessage(from, {
               type: 'interactive',
               interactive: {
                 type: 'button',
-                body: { text: bodyText },
+                header: { type: 'text', text: headerText },
+                body: { text: contactsList.trim() },
+                footer: { text: footerText },
                 action: {
                   buttons: [
                     { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Volver al Menú' } },
@@ -2984,8 +2990,8 @@ app.post('/whatsapp', async (req, res) => {
             delete userStates[numeroRemitente];
             break;
           }
+          // --- ☝️ FIN DE LA LÓGICA MEJORADA ---
 
-          // --- ESTA PARTE SIGUE IGUAL: SI NO HAY NI LEAD NI CONTACTO ---
           currentState.step = 'awaiting_creation_confirmation';
           currentState.data = { phone: [{ type: 'mobile', value: raw }], 'telefono-busqueda': raw };
           await sendMessage(from, {
