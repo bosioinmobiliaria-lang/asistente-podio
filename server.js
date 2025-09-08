@@ -13,6 +13,8 @@ app.use(express.urlencoded({ extended: true }));
 // Helpers
 // ----------------------------------------
 
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 function cleanDeep(obj) {
   if (obj === null || obj === undefined) return undefined;
   if (Array.isArray(obj)) {
@@ -1088,13 +1090,12 @@ async function sendHighPriceList(to) {
   });
 }
 
-// 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
-// 3.6) Paginado de resultados (unificado en una 'Card' por propiedad)
+// 3.6) Paginado de resultados con orden de mensaje corregido
 async function sendPropertiesPage(to, properties, startIndex = 0) {
-  const batchSize = 5;
+  const batchSize = 5;
   const batch = properties.slice(startIndex, startIndex + batchSize);
 
-  for (let i = 0; i < batch.length; i++) {
+  for (let i = 0; i < batch.length; i++) {
     const prop = batch[i];
     const currentNumber = startIndex + i + 1;
 
@@ -1118,9 +1119,12 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       await sendMessage(to, { type: 'text', text: { body: captionText } });
     }
 
-    // 👇 --- LÓGICA MEJORADA: Enviar el botón DESPUÉS de la última propiedad de la tanda --- 👇
+    // --- LÓGICA FINAL CON PAUSA ESTRATÉGICA ---
     const isLastInBatch = i === batch.length - 1;
     if (isLastInBatch) {
+      // 👇 PAUSA DE 2 SEGUNDOS ANTES DE ENVIAR EL BOTÓN
+      await delay(2000);
+
       const hasMore = startIndex + batchSize < properties.length;
       if (hasMore) {
         await sendMessage(to, {
@@ -1141,7 +1145,6 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
         await sendPostResultsOptions(to);
       }
     }
-    // ☝️ --- FIN DE LA LÓGICA MEJORADA --- ☝️
   }
 }
 
