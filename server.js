@@ -2820,7 +2820,7 @@ app.post('/whatsapp', async (req, res) => {
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-            // ⚠️ SOLO categorías + refs. Nada de start_date/start/end acá.
+            // 1. Armamos el objeto base con los datos del wizard
             const fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
@@ -2831,21 +2831,21 @@ app.post('/whatsapp', async (req, res) => {
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
             };
 
-            // Descubrimos cuál es el campo fecha (external_id real) y dejamos
-            // que el helper pruebe rango sin hora y con hora.
+            // 2. Buscamos CUALQUIER campo de fecha que sea requerido y le ponemos la fecha de hoy
             const meta = await getLeadsFieldsMeta();
-            const dateExternalId =
-              process.env.PODIO_LEADS_DATE_EXTERNAL_ID ||
-              meta.find(f => f.type === 'date')?.external_id ||
-              null;
+            const requiredDates = meta.filter(f => f.type === 'date' && f.config?.required);
+            const today = new Date();
 
-            console.log(
-              '[LEADS] FINAL PAYLOAD (ANTES CREATE) →',
-              JSON.stringify({ fields }, null, 2),
-            );
+            for (const dateField of requiredDates) {
+              const extId = dateField.external_id;
+              // Esta función construye el objeto de fecha correcto (con o sin hora, como lo pida Podio)
+              fields[extId] = buildPodioDateForCreate(dateField, today);
+            }
 
-            // 👉 Esto intenta 1) {start_date,end_date} y si falla 2) {start,end}
-            const created = await createLeadWithDateFallback(fields, dateExternalId, new Date());
+            console.log('[LEADS] PAYLOAD FINAL (UNIFICADO) →', JSON.stringify({ fields }, null, 2));
+
+            // 3. Intentamos crear el Lead con el payload completo
+            const created = await createItemIn('leads', fields);
 
             currentState.leadItemId = created.item_id;
             currentState.step = 'awaiting_newlead_voice';
