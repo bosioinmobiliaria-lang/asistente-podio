@@ -2820,7 +2820,6 @@ app.post('/whatsapp', async (req, res) => {
           try {
             const vendedorId = VENDEDORES_LEADS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
 
-            // 1. Armamos el objeto base con los datos del wizard
             const fields = {
               'contacto-2': [{ item_id: currentState.contactItemId }],
               'telefono-busqueda': currentState.tempPhoneDigits,
@@ -2831,20 +2830,22 @@ app.post('/whatsapp', async (req, res) => {
               'ideal-time-frame-of-sale': [currentState.leadDraft.expectativa],
             };
 
-            // 2. Buscamos CUALQUIER campo de fecha que sea requerido y le ponemos la fecha de hoy
+            // --- CORRECCIÓN CLAVE ---
+            // Ahora buscamos TODOS los campos de fecha, sin importar si son requeridos o no.
             const meta = await getLeadsFieldsMeta();
-            const requiredDates = meta.filter(f => f.type === 'date' && f.config?.required);
+            const allDateFields = meta.filter(f => f.type === 'date'); // <-- Eliminamos el filtro 'required'
             const today = new Date();
 
-            for (const dateField of requiredDates) {
+            for (const dateField of allDateFields) {
               const extId = dateField.external_id;
-              // Esta función construye el objeto de fecha correcto (con o sin hora, como lo pida Podio)
               fields[extId] = buildPodioDateForCreate(dateField, today);
             }
 
-            console.log('[LEADS] PAYLOAD FINAL (UNIFICADO) →', JSON.stringify({ fields }, null, 2));
+            console.log(
+              '[LEADS] PAYLOAD FINAL (CON FECHA FORZADA) →',
+              JSON.stringify({ fields }, null, 2),
+            );
 
-            // 3. Intentamos crear el Lead con el payload completo
             const created = await createItemIn('leads', fields);
 
             currentState.leadItemId = created.item_id;
