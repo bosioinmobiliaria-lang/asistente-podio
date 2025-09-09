@@ -2091,12 +2091,20 @@ app.post('/whatsapp', async (req, res) => {
 
     // 🔗 Override global del menú: funciona aunque haya estado previo
     if (['menu_check_contact', 'menu_actualizar', 'menu_buscar'].includes(input)) {
+      // Siempre arrancamos “limpio”
       delete userStates[numeroRemitente];
 
       if (input === 'menu_check_contact') {
-        // ... (sin cambios)
+        // 👉 Inicia flujo "Chequear contacto"
+        userStates[numeroRemitente] = { step: 'check_contact_start' };
+        await sendMessage(from, {
+          type: 'text',
+          text: {
+            body: '📇 Decime el *celular* a buscar (10 dígitos, sin 0 ni 15).',
+          },
+        });
       } else if (input === 'menu_actualizar') {
-        // <-- ESTA ES LA PARTE A CAMBIAR
+        // 👉 Inicia flujo "Actualizar leads"
         userStates[numeroRemitente] = { step: 'update_lead_start' };
         await sendMessage(from, {
           type: 'text',
@@ -2105,9 +2113,12 @@ app.post('/whatsapp', async (req, res) => {
           },
         });
       } else if (input === 'menu_buscar') {
-        // ... (sin cambios)
+        // 👉 Inicia flujo "Búsqueda de propiedad"
+        userStates[numeroRemitente] = { step: 'awaiting_property_type', filters: {} };
+        await sendPropertyTypeList(from); // lista interactiva de tipos
       }
-      return;
+
+      return; // 👈 IMPORTANTE: no sigas procesando este mensaje
     }
 
     // CAMBIO 3: La variable "respuesta" se elimina. Cada respuesta se envía directamente.
@@ -2593,13 +2604,6 @@ app.post('/whatsapp', async (req, res) => {
             type: 'text',
             text: { body: `✅ ¡Encontré ${results.length} propiedades disponibles!` },
           });
-
-          currentState.step = 'showing_results';
-          currentState.results = results;
-          currentState.nextIndex = 0;
-          await sendPropertiesPage(from, results, currentState.nextIndex);
-          currentState.nextIndex += 5;
-          break;
 
           currentState.step = 'showing_results';
           currentState.results = results;
