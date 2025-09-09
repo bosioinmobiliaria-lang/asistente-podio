@@ -14,6 +14,8 @@ app.use(express.urlencoded({ extended: true }));
 // ----------------------------------------
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const PER_ITEM_DELAY_MS = Number(process.env.WA_PER_ITEM_DELAY_MS || 900); // pausa entre propiedades
+const BEFORE_BUTTON_DELAY_MS = Number(process.env.WA_BEFORE_BUTTON_DELAY_MS || 3000); // pausa antes del botón
 
 function cleanDeep(obj) {
   if (obj === null || obj === undefined) return undefined;
@@ -1130,32 +1132,28 @@ async function sendPropertiesPage(to, properties, startIndex = 0) {
       await sendMessage(to, { type: 'text', text: { body: captionText } });
     }
 
-    // --- LÓGICA FINAL CON PAUSA ESTRATÉGICA ---
-    const isLastInBatch = i === batch.length - 1;
-    if (isLastInBatch) {
-      // 👇 PAUSA DE 2 SEGUNDOS ANTES DE ENVIAR EL BOTÓN
-      await delay(2000);
+    // 🛑 Pequeña pausa por cada propiedad para evitar que el botón se adelante
+    await delay(PER_ITEM_DELAY_MS);
+  }
 
-      const hasMore = startIndex + batchSize < properties.length;
-      if (hasMore) {
-        await sendMessage(to, {
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: '¿Ver más resultados?' },
-            action: {
-              buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }],
-            },
-          },
-        });
-      } else {
-        await sendMessage(to, {
-          type: 'text',
-          text: { body: '✅ Esos son todos los resultados.' },
-        });
-        await sendPostResultsOptions(to);
-      }
-    }
+  // ⏳ Pausa extra para que la última imagen termine de “asentarse” en WhatsApp
+  await delay(BEFORE_BUTTON_DELAY_MS);
+
+  const hasMore = startIndex + batchSize < properties.length;
+  if (hasMore) {
+    await sendMessage(to, {
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: '¿Ver más resultados?' },
+        action: {
+          buttons: [{ type: 'reply', reply: { id: 'props_more', title: '➡️ Ver más' } }],
+        },
+      },
+    });
+  } else {
+    await sendMessage(to, { type: 'text', text: { body: '✅ Esos son todos los resultados.' } });
+    await sendPostResultsOptions(to);
   }
 }
 
@@ -1395,6 +1393,23 @@ async function sendAfterUpdateOptions(to) {
         buttons: [
           { type: 'reply', reply: { id: 'after_back_menu', title: '🏠 Menú principal' } },
           { type: 'reply', reply: { id: 'after_done', title: '❌ Cancelar' } },
+        ],
+      },
+    },
+  });
+}
+
+async function sendAfterContactOptions(to) {
+  await sendMessage(to, {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: '¿Necesitás algo más?' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'contact_create_lead', title: '🧾 Crear Lead' } },
+          { type: 'reply', reply: { id: 'contact_back_menu', title: '🏠 Menú principal' } },
+          { type: 'reply', reply: { id: 'contact_cancel', title: '❌ Cancelar' } },
         ],
       },
     },
@@ -3320,6 +3335,29 @@ app.post('/whatsapp', async (req, res) => {
                 },
               },
             });
+          }
+          break;
+        }
+
+        case 'post_contact_created_options': {
+          if (input === 'contact_create_lead') {
+            const podioLink = 'https://podio.com/bosio/real-estate-pack/apps/leads/items/new';
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: `🧾 Para crear un nuevo *Lead*, abrí este enlace:\n${podioLink}` },
+            });
+            // Después de mandar el link, dejo 2 opciones estándar
+            currentState.step = 'after_update_options';
+            await sendAfterUpdateOptions(from); // (🏠 Menú / ❌ Cancelar)
+          } else if (input === 'contact_back_menu') {
+            delete userStates[numeroRemitente];
+            await sendMainMenu(from);
+          } else if (input === 'contact_cancel' || low === 'cancelar') {
+            delete userStates[numeroRemitente];
+            await sendFarewell(from); // despedida personalizada
+          } else {
+            // Si escribe otra cosa, repito las opciones
+            await sendAfterContactOptions(from);
           }
           break;
         }
