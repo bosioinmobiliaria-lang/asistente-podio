@@ -2339,45 +2339,44 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'awaiting_origin': {
-  // Esperamos un list_reply con ids "origin_#"
-  const m = /^origin_(\d+)$/.exec(input || '');
-  if (!m) {
-    await sendOriginList(from);
-    break;
-  }
-  const key = m[1]; // "1" .. "11"
-  const origenId = ORIGEN_CONTACTO_MAP[key];
-  if (!origenId) {
-    await sendOriginList(from);
-    break;
-  }
+          // Esperamos un list_reply con ids "origin_#"
+          const m = /^origin_(\d+)$/.exec(input || '');
+          if (!m) {
+            await sendOriginList(from);
+            break;
+          }
+          const key = m[1]; // "1" .. "11"
+          const origenId = ORIGEN_CONTACTO_MAP[key];
+          if (!origenId) {
+            await sendOriginList(from);
+            break;
+          }
 
-  currentState.data['contact-type'] = [origenId];
-  const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-  currentState.data['vendedor-asignado-2'] = [vendedorId];
-  currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
-  delete currentState.data['telefono-busqueda'];
+          currentState.data['contact-type'] = [origenId];
+          const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+          currentState.data['vendedor-asignado-2'] = [vendedorId];
+          currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+          delete currentState.data['telefono-busqueda'];
 
-  try {
-    await createItemIn('contactos', currentState.data);
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '✅ *Contacto creado y asignado.*' },
-    });
+          try {
+            await createItemIn('contactos', currentState.data);
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '✅ *Contacto creado y asignado.*' },
+            });
 
-    // 👇 Nuevo: ofrecer acciones después de crear el contacto
-    userStates[numeroRemitente] = { step: 'post_contact_created_options' };
-    await sendAfterContactOptions(from); // (Crear Lead / Menú / Cancelar)
-  } catch (e) {
-    await sendMessage(from, {
-      type: 'text',
-      text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
-    });
-    delete userStates[numeroRemitente];
-  }
-  break;
-}
-
+            // 👇 Nuevo: ofrecer acciones después de crear el contacto
+            userStates[numeroRemitente] = { step: 'post_contact_created_options' };
+            await sendAfterContactOptions(from); // (Crear Lead / Menú / Cancelar)
+          } catch (e) {
+            await sendMessage(from, {
+              type: 'text',
+              text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
+            });
+            delete userStates[numeroRemitente];
+          }
+          break;
+        }
 
         // ===== Tipo de propiedad elegido =====
         case 'awaiting_property_type': {
@@ -3045,44 +3044,41 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'update_lead_menu': {
-          const id = input;
           const leadId = currentState.leadItemId;
           if (!leadId) {
             delete userStates[numeroRemitente];
             break;
           }
 
-          if (id === 'update_info') {
+          if (input === 'update_info') {
             const leadItem = await getLeadDetails(leadId);
             const summary = formatLeadInfoSummary(leadItem);
             await sendMessage(from, { type: 'text', text: { body: summary } });
-            const nameField = (leadItem.fields || []).find(f => f.external_id === 'contacto-2');
-            const leadName = nameField
-              ? nameField.values?.[0]?.value?.title || 'Sin nombre'
-              : 'Sin nombre';
+            const leadName = getTextFieldValue(leadItem, 'title') || 'Sin nombre';
             await sendLeadUpdateMenu(from, leadName);
-          } else if (id === 'update_newconv') {
+          } else if (input === 'update_newconv') {
             currentState.step = 'awaiting_newconv_text';
             await sendMessage(from, {
               type: 'text',
               text: {
-                body: '🗣️ Enviá *texto o audio* con la conversación. Lo voy a resumir y guardar en el seguimiento.',
+                body: '🗣️ Enviá *texto o audio* con la conversación para guardar en el seguimiento.',
               },
             });
-          } else if (id === 'update_visit') {
-            currentState.step = 'awaiting_visit_date';
+          } else if (input === 'update_visit') {
+            // 👇 NUEVO COMPORTAMIENTO: enviar link de Podio y luego opciones (menú / cancelar)
+            const podioLink =
+              'https://podio.com/bosio/real-estate-pack/apps/visita-a-la-propiedad/items/new';
             await sendMessage(from, {
               type: 'text',
-              text: {
-                body: '📅 Decime la *fecha* de la visita (AAAA-MM-DD). Podés agregar hora HH:MM.',
-              },
+              text: { body: `📅 Para *agendar una visita*, abrí este enlace:\n${podioLink}` },
             });
+
+            // Mostrar “¿Necesitás algo más?” con Menú principal / Cancelar (despedida personalizada)
+            currentState.step = 'after_update_options';
+            await sendAfterUpdateOptions(from);
           } else {
             const leadItem = await getLeadDetails(leadId);
-            const nameField = (leadItem.fields || []).find(f => f.external_id === 'contacto-2');
-            const leadName = nameField
-              ? nameField.values?.[0]?.value?.title || 'Sin nombre'
-              : 'Sin nombre';
+            const leadName = getTextFieldValue(leadItem, 'title') || 'Sin nombre';
             await sendLeadUpdateMenu(from, leadName);
           }
           break;
