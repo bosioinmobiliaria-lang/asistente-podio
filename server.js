@@ -2339,40 +2339,45 @@ app.post('/whatsapp', async (req, res) => {
         }
 
         case 'awaiting_origin': {
-          // Esperamos un list_reply con ids "origin_#"
-          const m = /^origin_(\d+)$/.exec(input || '');
-          if (!m) {
-            await sendOriginList(from);
-            break;
-          }
-          const key = m[1]; // "1" .. "11"
-          const origenId = ORIGEN_CONTACTO_MAP[key];
-          if (!origenId) {
-            await sendOriginList(from);
-            break;
-          }
+  // Esperamos un list_reply con ids "origin_#"
+  const m = /^origin_(\d+)$/.exec(input || '');
+  if (!m) {
+    await sendOriginList(from);
+    break;
+  }
+  const key = m[1]; // "1" .. "11"
+  const origenId = ORIGEN_CONTACTO_MAP[key];
+  if (!origenId) {
+    await sendOriginList(from);
+    break;
+  }
 
-          currentState.data['contact-type'] = [origenId];
-          const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
-          currentState.data['vendedor-asignado-2'] = [vendedorId];
-          currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
-          delete currentState.data['telefono-busqueda'];
+  currentState.data['contact-type'] = [origenId];
+  const vendedorId = VENDEDORES_CONTACTOS_MAP[numeroRemitente] || VENDEDOR_POR_DEFECTO_ID;
+  currentState.data['vendedor-asignado-2'] = [vendedorId];
+  currentState.data['fecha-de-creacion'] = buildPodioDateObject(new Date());
+  delete currentState.data['telefono-busqueda'];
 
-          try {
-            await createItemIn('contactos', currentState.data);
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '✅ *Contacto creado y asignado.*' },
-            });
-          } catch (e) {
-            await sendMessage(from, {
-              type: 'text',
-              text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
-            });
-          }
-          delete userStates[numeroRemitente];
-          break;
-        }
+  try {
+    await createItemIn('contactos', currentState.data);
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: '✅ *Contacto creado y asignado.*' },
+    });
+
+    // 👇 Nuevo: ofrecer acciones después de crear el contacto
+    userStates[numeroRemitente] = { step: 'post_contact_created_options' };
+    await sendAfterContactOptions(from); // (Crear Lead / Menú / Cancelar)
+  } catch (e) {
+    await sendMessage(from, {
+      type: 'text',
+      text: { body: '⚠️ No pude crear el contacto. Probá más tarde.' },
+    });
+    delete userStates[numeroRemitente];
+  }
+  break;
+}
+
 
         // ===== Tipo de propiedad elegido =====
         case 'awaiting_property_type': {
